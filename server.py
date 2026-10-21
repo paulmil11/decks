@@ -505,7 +505,8 @@ def bundle_copy(deck, html, code_paths=True):
     html = re.sub(r'<script\b([^>]*?)\s+src="([^"]+)"([^>]*)>\s*</script>', script, html)
 
     found = set()
-    for rel in re.findall(r'(?<=["\'(\s=`])(?:\./)?([\w%-][\w%./-]*\.' + IMG_EXT + r')(?=["\')\s?#`])', html):
+    # any character a path can't hold ends its name: 'img/a.jpg|img/b.jpg', or href=\"img/a.jpg\" in a figure a review copy writes out
+    for rel in re.findall(r'(?<![\w%./-])(?:\./)?([\w%-][\w%./-]*\.' + IMG_EXT + r')(?![\w%./-])', html):
         if inside(rel):
             found.add(rel)
     for pre, post in re.findall(r'`((?:[\w-]+/)*[\w.-]*)\$\{[^}`]*\}([\w.-]*\.' + IMG_EXT + r')`', html) if code_paths else ():
