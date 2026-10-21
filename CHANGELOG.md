@@ -4,13 +4,17 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
-## Unreleased
+## 0.10.1 (October 21, 2026)
 
 - `sb shot`, `sb audit`, `sb export`, Download PDF, and dashboard thumbnails wait until the deck
   has finished drawing (fonts, pictures, animations) instead of pausing a fixed time. A
   screenshot or an audit takes about 0.6 seconds instead of 2, and `sb export` under 2 seconds
   instead of 6. Screenshots and PDFs come out the same. A slide that draws itself later, like a
   chart that loads its data, can set `window.__DECK_READY` to a promise, and they wait for it.
+- Client, Review and Editable copies carry every picture a deck uses, including two joined in one
+  setting (`img/a.jpg|img/b.jpg`). Before, a copy could open with those pictures missing.
+- Share › Review copy works on every version of a deck whose file opens on one fixed version, not
+  just that one.
 
 ## 0.10.0 (October 21, 2026)
 
