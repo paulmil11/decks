@@ -4,7 +4,7 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
-## Unreleased
+## 0.10.2 (October 21, 2026)
 
 - A proposed slide filed apart from its original (in another part, among the extras, or left out
   of a version that lists the original by hand) no longer stays out of sight: it shows right
