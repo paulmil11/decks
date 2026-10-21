@@ -1427,6 +1427,21 @@
   .slide.l-section .sec-step.on span { opacity: 1; font-weight: 700; }
   .slide.l-section .logo { filter: brightness(0) invert(1); opacity: .8; }
 
+  /* the editor around the slides keeps the engine's own colors, wherever a deck's theme sets its colors (on :root,
+     or on .slide, .slide-frame): a dark deck's light text and lighter accent belong to its slides, and would turn
+     the sidebar, the stage head, the slide numbers, the ↑ ↓ × buttons, the comment boxes and the sorter's labels
+     pale on their light backgrounds. Never on anything that holds a slide (.slide-frame, .th, .so-shelf, .sorter),
+     or the slides inside would lose their theme: those get fixed colors on the one property instead. */
+  .sidebar, .stage-head, .view-toggle, .present-btns, .slide-no, .ctrls, .slide-tag, .btn, .fb, #nosave-banner, #edits-overlay,
+  .so-head, .th-meta, .th-t, .th-x, .th::before, .th::after, .so-shelf-h, .so-shelf-cat, .so-empty {
+    --ink: #231F20; --text: #2B2725; --text-light: #635B58; --text-mute: #948C88; --white: #FFFFFF; --paper: #F1EFEE; --line: #D9D4D0;
+    --red: #CE3642; --red-deep: #A22731; --maroon-deep: #3F1516;
+  }
+  .sidebar, .stage-head, .slide-no, #edits-overlay .eo-box, .so-shelf-h { color: var(--text); }
+  .th.sel { box-shadow: 0 0 0 2px #A22731; }
+  .so-shelf { border-color: #D9D4D0; }
+  .so-shelf.shelf-over { outline-color: #A22731; }
+
   /* picture layouts (Decks): the picture sits in an editable box, so replacing it saves like any edit */
   .slide.l-picture, .slide.l-pictures { padding: 2.6rem 3.4rem 3.2rem; }
   .slide.l-picture .h-title, .slide.l-pictures .h-title { font-size: 2.1rem; margin: 0 0 1.4rem; }

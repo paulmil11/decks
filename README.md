@@ -355,7 +355,9 @@ Templates (`templates/<id>/`):
 
 Colors: Navy, Dark, Minimal, Forest, Teal, or Plum, with serif or sans serif titles.
 They're written into the deck as one `<style id="deck-theme">` block, so you can restyle
-the whole deck in one place. Upload a logo and it goes in the corner of every slide.
+the whole deck in one place. Set text and background colors on `.slide, .slide-frame` there,
+not on `:root`, as the Dark theme does: they belong to the slides, and the editor around
+them keeps its own. Upload a logo and it goes in the corner of every slide.
 
 ### Importing a deck you already have
 
