@@ -19,19 +19,48 @@
   const layoutOf = (slide) => ((slide.className.match(/\bl-([a-z0-9-]+)/) || [])[1] || '');
 
   // a slide's title, wherever its layout puts it: the deck's own title element (even nested in a
-  // column or panel), then a heading (h1, h2). Decks built by an agent nest titles in custom layouts,
-  // so "the first child with class h-title" is not enough. No guessing from font size: a quote or a
-  // reflection question is not a title.
+  // column or panel), PowerPoint's title on a slide rebuilt from PowerPoint, then a heading (h1, h2).
+  // Decks built by an agent nest titles in custom layouts, so "the first child with class h-title" is
+  // not enough. No guessing from font size: a quote or a reflection question is not a title.
   function titleOf(slide) {
     if (!slide) return null;
     const live = slide.getBoundingClientRect().width > 0;   // a slide off screen (another view, another slide) has no layout: go by markup
     const shown = (el) => { if (!el.textContent.trim() || getComputedStyle(el).display === 'none') return false; if (!live) return true; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
     const direct = slide.querySelector(':scope > .h-title'); if (direct && shown(direct)) return direct;
     const named = [...slide.querySelectorAll('.h-title, [data-title]')].find((e) => !e.closest(SKIP) && shown(e)); if (named) return named;
+    const pp = pptxTitle(slide); if (pp && shown(pp)) return pp;
     const size = (e) => parseFloat(getComputedStyle(e).fontSize) || 0;
     const heads = [...slide.querySelectorAll('h1, h2')].filter((e) => !e.closest(SKIP) && shown(e));
     if (heads.length) return heads.sort((a, b) => size(b) - size(a))[0];
     return null;   // no title element and no heading: a quote, a question, a picture. Those show whole.
+  }
+
+  // A slide rebuilt from PowerPoint (layout pptx, like the consulting template) is boxes of text with no
+  // title element. PowerPoint's own data says where its title placeholder sits: on the slide's shapes, or,
+  // where the template strips that mark (so the engine doesn't enlarge the title), in the PowerPoint
+  // slides the deck was built from (CT, ct-slides.js). Take the box drawn at that spot. A title in one run
+  // of text returns that run, so Checks can edit it in place without touching its font; a title in mixed
+  // formatting returns the whole box, found but edited on the slide.
+  function pptxTitle(slide) {
+    if (layoutOf(slide) !== 'pptx') return null;
+    const isTitle = (sh) => sh && sh.k === 'box' && sh.ph === 'title';
+    let spots = [];
+    /* eslint-disable no-undef */
+    try { const b = LIBRARY[slide.dataset.id]; spots = ((b && b.pp && b.pp.shapes) || []).filter(isTitle); } catch (e) { /* no deck data */ }
+    if (!spots.length) try { spots = Object.values(CT).flatMap((c) => ((c && c.shapes) || []).filter(isTitle)); } catch (e) { /* no PowerPoint data */ }
+    /* eslint-enable no-undef */
+    let box = null, gap = 24;   // a nudge moves a box a few pixels at most
+    slide.querySelectorAll(':scope > .pp-t').forEach((d) => {
+      const x = parseFloat(d.style.left), y = parseFloat(d.style.top);
+      spots.forEach((sh) => { const g = Math.abs(x - sh.x) + Math.abs(y - sh.y); if (g < gap) { gap = g; box = d; } });
+    });
+    if (!box) return null;
+    const paras = [...box.children].filter((p) => p.textContent.trim());
+    if (paras.length !== 1) return box;
+    const p = paras[0], runs = [...p.children];
+    if (!runs.length) return p;
+    const bare = [...p.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim());
+    return runs.length === 1 && !bare ? runs[0] : box;
   }
 
   // what a slide breaks, in slide pixels

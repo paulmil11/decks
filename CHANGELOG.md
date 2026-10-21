@@ -4,6 +4,13 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
+## 0.10.3 (October 21, 2026)
+
+- Checks finds the titles on slides built from PowerPoint, like the consulting template's.
+  Horizontal flow shows them as titles you can edit in place (before, they were grey, as if the
+  slide had no title), and Vertical flow hides the body until you reveal it. Decks you've
+  already made get the fix too, with no change to the deck file.
+
 ## 0.10.2 (October 21, 2026)
 
 - A proposed slide filed apart from its original (in another part, among the extras, or left out
