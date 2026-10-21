@@ -14,222 +14,190 @@
 // The server is at SB_URL (sb and the server set it), else http://localhost:$SB_PORT (8790).
 // Chrome: SB_CHROME if set, else Playwright's Chrome for Testing (setup.sh installs it),
 // else an installed Google Chrome or Chromium.
-import { chromium } from 'playwright-core';
+//
+// One Chrome serves the jobs (they are in browser-jobs.mjs). The first job starts a worker for this user
+// that keeps headless Chrome open: it listens on a Unix socket in a folder only this user can open, runs
+// one job at a time, each in a fresh browser context, and quits after two idle minutes. A job runs here,
+// in a Chrome of its own, when SB_BROWSER_WORKER=0, on Windows, or when no worker can take it.
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import net from 'net';
+import { createHash } from 'crypto';
+import { execFileSync, spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 
 const BASE = (process.env.SB_URL || `http://localhost:${process.env.SB_PORT || 8790}`).replace(/\/$/, '');
 const args = process.argv.slice(2);
-const cmd = args.shift();
-const vi = args.indexOf('--version'); let version = null;
-if (vi >= 0) { version = args[vi + 1]; args.splice(vi, 2); }
-const wi = args.indexOf('--with-edits'); const withEdits = wi >= 0; if (withEdits) args.splice(wi, 1);   // export what the browser shows, saved edits included
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const CWD = (() => { try { return process.cwd(); } catch (e) { return null; } })();   // null: the caller's folder is gone
+const IDLE_MS = Math.max(1000, Number(process.env.SB_BROWSER_IDLE_MS) || 120000);
+const JOB_MS = 300000;   // a job still running after five minutes is stuck: the worker gives up on it and quits
 
-function chrome() {
-  const env = process.env.SB_CHROME;
-  if (env) { if (fs.existsSync(env)) return env; throw new Error(`SB_CHROME is set to ${env}, which does not exist`); }
-  // where Playwright keeps its browsers, newest first
-  const home = os.homedir();
-  const roots = [process.env.PLAYWRIGHT_BROWSERS_PATH, path.join(home, 'Library/Caches/ms-playwright'), path.join(home, '.cache/ms-playwright'),
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'ms-playwright')].filter((r) => r && r !== '0' && fs.existsSync(r));
-  const inside = ['chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Chromium.app/Contents/MacOS/Chromium', 'chrome-linux64/chrome', 'chrome-linux/chrome', 'chrome-win64/chrome.exe', 'chrome-win/chrome.exe'];
-  for (const root of roots) {
-    const dirs = fs.readdirSync(root).filter((d) => /^chromium-\d+$/.test(d)).sort((a, b) => +b.split('-')[1] - +a.split('-')[1]);
-    for (const d of dirs) for (const rel of inside) { const exe = path.join(root, d, rel); if (fs.existsSync(exe)) return exe; }
+// A worker and its Chrome run at the priority of whoever started them, and a server run by launchd
+// can be throttled to background priority (macOS shows that as a low PRI), which makes shots about
+// twice as slow. So a throttled caller gets a worker of its own, and never hands one to the others.
+function priority() {
+  let p = String(os.getPriority());
+  if (process.platform === 'darwin') {
+    try { if (Number(execFileSync('/bin/ps', ['-o', 'pri=', '-p', String(process.pid)], { encoding: 'utf8' })) < 31) p += ' throttled'; } catch (e) {}
   }
-  try { const exe = chromium.executablePath(); if (exe && fs.existsSync(exe)) return exe; } catch (e) { /* not installed */ }
-  const system = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'];
-  for (const exe of system) if (fs.existsSync(exe)) return exe;
-  throw new Error('No Chrome found. Run ./setup.sh (it installs Chrome for Testing), or set SB_CHROME to a Chrome or Chromium executable.');
+  return p;
 }
 
-async function open(slug, width = 1600, withState = false) {
-  const deck = await (await fetch(`${BASE}/api/decks/${slug}`)).json();
-  if (deck.error) throw new Error(`no deck ${slug}`);
-  const browser = await chromium.launch({ executablePath: chrome(), headless: true });
-  const page = await browser.newPage({ viewport: { width, height: 1000 } });
-  const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(`${BASE}${deck.url}?${withState ? 'readonly=1' : 'raw=1'}`, { waitUntil: 'networkidle' });
-  await page.evaluate(() => document.fonts.ready);
-  if (version) {
-    const ok = await page.evaluate((v) => { const s = document.querySelector('.sidebar select'); if (!s || ![...s.options].some((o) => o.value === v)) return false; s.value = v; s.dispatchEvent(new Event('change', { bubbles: true })); return true; }, version);
-    if (!ok) throw new Error(`no version ${version}`);
+// The worker's socket and lock. The name changes with this code and the Chrome it would start, so a
+// worker from older code (or for another Chrome) is never asked; it quits when idle.
+function where() {
+  if (process.env.SB_BROWSER_WORKER === '0' || typeof process.getuid !== 'function') return null;   // Windows: no getuid, no worker
+  const id = createHash('sha256')
+    .update([HERE, os.tmpdir(), priority(), process.env.SB_CHROME, process.env.PLAYWRIGHT_BROWSERS_PATH, IDLE_MS].map((x) => String(x || '')).join('\0'))
+    .update(fs.readFileSync(path.join(HERE, 'browser.mjs'))).update(fs.readFileSync(path.join(HERE, 'browser-jobs.mjs')))
+    .digest('hex').slice(0, 16);
+  for (const root of [os.tmpdir(), '/tmp']) {   // macOS allows a socket path of 103 bytes at most: a long TMPDIR falls back to /tmp
+    const sock = path.join(root, `decks-browser-${process.getuid()}`, `${id}.sock`);
+    if (Buffer.byteLength(sock) <= 103) return paths(sock);
   }
-  await page.waitForTimeout(900);
-  return { browser, page, deck, errors };
+  return null;
+}
+const paths = (sock) => ({ sock, dir: path.dirname(sock), lock: sock.replace(/\.sock$/, '.lock') });
+
+function privateDir(dir) {   // this user's, and only this user's
+  try {
+    try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const st = fs.lstatSync(dir);
+    return st.isDirectory() && st.uid === process.getuid() && !(st.mode & 0o077);
+  } catch (e) { return false; }
 }
 
-const order = (page) => page.evaluate(() => [...document.getElementById('deck').children].filter((n) => n.dataset && n.dataset.id).map((w, i) => {
-  const id = w.dataset.id; let t = '';
-  try { t = typeof titleOf === 'function' ? titleOf(id) : ''; } catch (e) {}           // eslint-disable-line no-undef
-  if (!t) { try { const b = LIBRARY[id] || {}; t = String(b.title || b.q || id).replace(/<[^>]+>/g, ''); } catch (e) { t = id; } } // eslint-disable-line no-undef
-  return { n: i + 1, id, title: t };
-}));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// --- the client: hand the job to the worker, starting one if none is running
+
+function ask(w) {   // { result } from the worker, or { code }: why no worker took the job
+  return new Promise((resolve) => {
+    const sock = net.createConnection(w.sock);
+    let data = '', code = 'gone';   // gone: the worker quit before answering
+    sock.setEncoding('utf8');
+    sock.on('connect', () => sock.write(JSON.stringify({ args, base: BASE, cwd: CWD }) + '\n'));
+    sock.on('data', (chunk) => { data += chunk; });
+    sock.on('error', (e) => { code = e.code; });
+    sock.on('close', () => { const i = data.indexOf('\n'); try { resolve(i < 0 ? { code } : { result: JSON.parse(data.slice(0, i)) }); } catch (e) { resolve({ code }); } });
+  });
+}
+
+async function viaWorker(w) {
+  let res = await ask(w);
+  if (res.result) return res.result;
+  if (!['ENOENT', 'ECONNREFUSED', 'gone'].includes(res.code)) return null;   // sockets not allowed here, say
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--worker', w.sock], { detached: true, stdio: 'ignore' });
+  let exited = 0;
+  child.on('error', () => { exited = Date.now(); }); child.on('exit', () => { exited = Date.now(); }); child.unref();
+  // wait for it; if it quits instead (another worker won the lock, or it can't start), give the winner a second
+  for (const until = Date.now() + 5000; Date.now() < until && !(exited && Date.now() - exited > 1000);) {
+    await sleep(40);
+    if (fs.existsSync(w.sock) && (res = await ask(w)).result) return res.result;
+  }
+  return null;
+}
+
+async function direct() {   // this job alone, in a Chrome of its own
+  const jobs = await import('./browser-jobs.mjs');
+  let chrome = null;
+  try { return await jobs.run(args, { base: BASE, browser: async () => (chrome ||= await jobs.launch()) }); }
+  finally { if (chrome) await chrome.close().catch(() => {}); }
+}
+
+// --- the worker
+
+const answers = (sock) => new Promise((resolve) => {
+  const s = net.createConnection(sock);
+  s.on('connect', () => { s.destroy(); resolve(true); });
+  s.on('error', () => resolve(false));
+});
+
+async function stale(w) {   // the lock's worker is gone: its process ended, or (its pid reused since) its socket is dead
+  let pid = 0, age = 0;
+  try { age = Date.now() - fs.statSync(w.lock).mtimeMs; pid = Number(fs.readFileSync(path.join(w.lock, 'pid'), 'utf8')); } catch (e) {}
+  if (pid > 0) { try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') return true; } }
+  return age > 30000 && !(await answers(w.sock));
+}
+
+// One worker at a time: the lock is a folder holding the worker's pid. A worker that finds a stale lock
+// takes it over; the .reap folder makes sure only one worker at a time does that.
+async function claim(w) {
+  const take = () => { fs.mkdirSync(w.lock, { mode: 0o700 }); fs.writeFileSync(path.join(w.lock, 'pid'), String(process.pid)); return true; };
+  try { return take(); } catch (e) { if (e.code !== 'EEXIST') return false; }
+  const reap = w.lock + '.reap';
+  try { fs.mkdirSync(reap, { mode: 0o700 }); } catch (e) {
+    try { if (Date.now() - fs.statSync(reap).mtimeMs > 30000) fs.rmdirSync(reap); } catch (e2) {}   // left by a worker that died reaping
+    return false;
+  }
+  try {
+    if (!(await stale(w))) return false;
+    fs.rmSync(w.lock, { recursive: true, force: true });
+    return take();
+  } catch (e) { return false; }
+  finally { try { fs.rmdirSync(reap); } catch (e) {} }
+}
+
+async function worker(w) {
+  if (!privateDir(w.dir) || !(await claim(w))) return;
+  const jobs = await import('./browser-jobs.mjs');
+  let chrome = null, timer = null, busy = 0, queue = Promise.resolve(), closing = false;
+  const browser = async () => { if (!chrome || !chrome.isConnected()) chrome = await jobs.launch(); return chrome; };
+  const quit = async () => {
+    if (closing) return;
+    closing = true; clearTimeout(timer);
+    server.close();
+    try { fs.unlinkSync(w.sock); } catch (e) {}
+    try { if (Number(fs.readFileSync(path.join(w.lock, 'pid'), 'utf8')) === process.pid) fs.rmSync(w.lock, { recursive: true, force: true }); } catch (e) {}
+    if (chrome) await Promise.race([chrome.close().catch(() => {}), sleep(5000)]);
+    process.exit(0);
+  };
+  const idle = () => { clearTimeout(timer); if (!busy && !closing) timer = setTimeout(quit, IDLE_MS); };
+
+  async function job(line) {
+    let req = null; try { req = JSON.parse(line); } catch (e) {}
+    if (!req || !Array.isArray(req.args) || req.args.some((a) => typeof a !== 'string') || typeof req.base !== 'string' || typeof req.cwd !== 'string')
+      return { out: '', error: 'Not a browser job', code: 1 };
+    try { process.chdir(req.cwd); } catch (e) { return { out: '', error: e.message, code: 1 }; }   // relative paths mean what they did to the caller
+    let stuck;
+    const res = await Promise.race([jobs.run(req.args, { base: req.base, browser }), new Promise((r) => { stuck = setTimeout(r, JOB_MS); })]);
+    clearTimeout(stuck);
+    if (res) return res;
+    setImmediate(quit);   // Chrome may be wedged: close it and this worker; the next job starts a fresh one
+    return { out: '', error: `The browser job was still running after ${JOB_MS / 60000} minutes, so it was stopped.`, code: 1 };
+  }
+
+  const server = net.createServer((sock) => {
+    let input = '', got = false, gone = false;
+    sock.setEncoding('utf8');
+    sock.on('error', () => {});
+    sock.on('close', () => { gone = true; });
+    sock.setTimeout(10000, () => { if (!got) sock.destroy(); });   // a client sends its job at once
+    sock.on('data', (chunk) => {
+      if (got) return;
+      input += chunk;
+      if (input.length > 1 << 20) return sock.destroy();
+      if (!input.includes('\n')) return;
+      got = true; sock.setTimeout(0); busy++; clearTimeout(timer);
+      queue = queue.then(async () => {   // one job at a time: exports don't fight over the CPU
+        if (!gone) sock.end(JSON.stringify(await job(input.slice(0, input.indexOf('\n')))) + '\n');   // a caller that gave up waiting is skipped
+      }).catch(() => sock.destroy()).finally(() => { busy--; idle(); });
+    });
+  });
+  server.on('error', quit);
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, quit);
+  try { fs.unlinkSync(w.sock); } catch (e) {}   // left by a worker that died
+  server.listen(w.sock, () => { fs.chmodSync(w.sock, 0o600); idle(); });
+}
 
 async function main() {
-  if (cmd === 'chrome') { console.log(chrome()); return; }
-  const slug = args.shift();
-  if (cmd === 'titles') {
-    const { browser, page } = await open(slug);
-    console.log(JSON.stringify(await order(page)));
-    await browser.close(); return;
-  }
-  if (cmd === 'proposals') {   // proposed slides (prop:true, replaces:'id'), and which of each pair every version shows with the saved state
-    // extra ids after the slug: report their flags too (sb proposals --bake checks the file with them)
-    const { browser, page, errors } = await open(slug, 1600, true);
-    const res = await page.evaluate((extra) => {
-      const L = LIBRARY, out = { version: String(current), versions: {}, blocks: {}, pairs: [], shown: {}, saved: [], flags: {} };   // eslint-disable-line no-undef
-      const plain = (s) => String(s || '').replace(/<[^>]+>/g, '').replace(/\*\*/g, '');
-      const t = (id) => { try { return plain(titleOf(id)); } catch (e) { return plain((L[id] || {}).title || (L[id] || {}).q || id); } };   // eslint-disable-line no-undef
-      Object.keys(PITCHES).forEach((k) => { out.versions[k] = String(PITCHES[k].name || k); out.blocks[k] = PITCHES[k].blocks.slice(); });   // eslint-disable-line no-undef
-      // versions that carry the extras too ("Everything"): an accepted proposal's original stays in them
-      out.extras = Object.fromEntries(Object.entries(out.blocks).map(([k, b]) => [k, b.some((id) => L[id] && L[id].alt && !L[id].lib && !L[id].prop)]));
-      out.pairs = Object.keys(L).filter((id) => L[id].prop && L[id].replaces).map((id) => ({ p: id, o: L[id].replaces, title: t(id), otitle: L[L[id].replaces] ? t(L[id].replaces) : '',
-        missing: !L[L[id].replaces], palt: !!L[id].alt, oalt: !!(L[L[id].replaces] || {}).alt, notes: plain(L[id].notes).slice(0, 300) }));
-      const flag = (id) => ({ exists: !!L[id], prop: !!(L[id] || {}).prop, alt: !!(L[id] || {}).alt, replaces: (L[id] || {}).replaces || null });
-      [...out.pairs.flatMap((x) => [x.p, x.o]), ...extra].forEach((id) => { out.flags[id] = flag(id); });
-      const sel = document.querySelector('.sidebar select'), first = String(current);   // eslint-disable-line no-undef
-      const ids = () => [...document.getElementById('deck').children].filter((n) => n.dataset && n.dataset.id).map((n) => n.dataset.id);
-      const has = (v) => { try { const d = savedFor(v); return !!(d && Array.isArray(d.__order)); } catch (e) { return false; } };   // eslint-disable-line no-undef
-      Object.keys(PITCHES).forEach((v) => {   // eslint-disable-line no-undef
-        if (has(v)) out.saved.push(v);
-        if (v !== String(current) && sel && [...sel.options].some((o) => o.value === v)) { sel.value = v; sel.dispatchEvent(new Event('change', { bubbles: true })); }   // eslint-disable-line no-undef
-        if (String(current) !== v) return;   // eslint-disable-line no-undef
-        const on = new Set(ids()); out.shown[v] = {};
-        out.pairs.forEach((x) => { out.shown[v][x.p] = [on.has(x.o), on.has(x.p)]; });
-      });
-      if (sel && first !== String(current)) { sel.value = first; sel.dispatchEvent(new Event('change', { bubbles: true })); }   // eslint-disable-line no-undef
-      return out;
-    }, args);
-    res.errors = errors;
-    console.log(JSON.stringify(res));
-    await browser.close(); return;
-  }
-  if (cmd === 'deckinfo') {   // what sb import checks a returned file against: versions, slide ids, storage key, each slide's text fingerprint
-    // --version v: fingerprints as that version builds its slides (a review copy says which); a version the deck lacks is reported, not fatal
-    const want = version; version = null;
-    const { browser, page } = await open(slug);
-    const res = await page.evaluate((want) => {
-      const out = { key: null, versions: {}, slides: [], defs: {}, version: null, vdefs: {}, fnotes: {}, blocks: {} };
-      try { Object.keys(PITCHES).forEach((k) => { out.versions[k] = String(PITCHES[k].name || k); out.blocks[k] = PITCHES[k].blocks.slice(); }); } catch (e) {}   // eslint-disable-line no-undef
-      try { const s = document.querySelector('.sidebar select'); if (want && s && [...s.options].some((o) => o.value === want)) { s.value = want; s.dispatchEvent(new Event('change', { bubbles: true })); } } catch (e) {}
-      try { out.version = String(current); } catch (e) {}                                                              // eslint-disable-line no-undef
-      try { out.slides = Object.keys(LIBRARY); } catch (e) {}                                                          // eslint-disable-line no-undef
-      try { const k = KEY(), c = String(current); if (k.endsWith(c)) out.key = k.slice(0, k.length - c.length); } catch (e) {}   // eslint-disable-line no-undef
-      try { out.slides.forEach((id) => { out.defs[id] = defHash(id); }); } catch (e) { out.defs = {}; }               // eslint-disable-line no-undef
-      // for a review copy: where each slide's facilitator note sits in its saved text, the note itself, and a
-      // fingerprint of the rest (a review copy carries a blank note, so sb import puts this one back)
-      const dj = (t) => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return String(h); };
-      try { out.slides.forEach((id) => { const ns = [...build(id).querySelectorAll('[contenteditable]')], at = ns.findIndex((n) => n.classList.contains('fnote'));   // eslint-disable-line no-undef
-        out.vdefs[id] = dj(ns.filter((n, i) => i !== at).map((n) => n.innerHTML).join('\u0001'));
-        if (at >= 0) out.fnotes[id] = [at, ns[at].innerHTML]; }); } catch (e) { out.vdefs = {}; out.fnotes = {}; }
-      return out;
-    }, want);
-    console.log(JSON.stringify(res));
-    await browser.close(); return;
-  }
-  if (cmd === 'edits') {   // the reviewer's inline edits and reordering, from the state saved on disk
-    const { browser, page } = await open(slug, 1600, true);
-    const res = await page.evaluate(() => {
-      const deckEl = document.getElementById('deck'), wraps = [...deckEl.children].filter((n) => n.dataset && n.dataset.id);
-      const edits = [];
-      wraps.forEach((w, k) => {
-        const id = w.dataset.id, now = [...w.querySelectorAll('[contenteditable]')].map((n) => n.innerHTML);
-        let f = null; try { f = build(id); } catch (e) {}                                   // eslint-disable-line no-undef
-        const def = f ? [...f.querySelectorAll('[contenteditable]')].map((n) => n.innerHTML) : [];
-        for (let i = 0; i < Math.max(now.length, def.length); i++) if ((now[i] || '') !== (def[i] || '')) edits.push({ n: k + 1, id, field: i, was: def[i], now: now[i] });
-      });
-      let defaults = []; try { defaults = PITCHES[current].blocks; } catch (e) {}           // eslint-disable-line no-undef
-      const order = wraps.map((w) => w.dataset.id);
-      let version = ''; try { version = current; } catch (e) {}                              // eslint-disable-line no-undef
-      const removed = defaults.filter((id) => !order.includes(id));
-      // a slide taken out because a proposal was decided: sb proposals --bake writes that, not a hand edit
-      const L = (() => { try { return LIBRARY; } catch (e) { return {}; } })(), proposals = {};   // eslint-disable-line no-undef
-      removed.forEach((id) => {
-        const b = L[id] || {}, by = Object.keys(L).find((x) => L[x].prop && L[x].replaces === id && order.includes(x));
-        if (b.prop && b.replaces && order.includes(b.replaces)) proposals[id] = `kept the original ${b.replaces}: bake with sb proposals --bake`;
-        else if (by) proposals[id] = `accepted the proposal ${by}: bake with sb proposals --bake`;
-      });
-      return { version, edits, removed, added: order.filter((id) => !defaults.includes(id)), proposals,
-        reordered: JSON.stringify(order.filter((id) => defaults.includes(id))) !== JSON.stringify(defaults.filter((id) => order.includes(id))) };
-    });
-    console.log(JSON.stringify(res, null, 1));
-    await browser.close(); return;
-  }
-  if (cmd === 'shot') {
-    const outdir = args.shift(); fs.mkdirSync(outdir, { recursive: true });
-    const { browser, page, errors } = await open(slug);
-    for (const id of args) {
-      let el = await page.$(`#deck > [data-id="${id}"] .slide`);
-      if (!el) {   // a slide outside this version: build it at the end of the deck
-        await page.evaluate((id) => { try { const w = build(id); if (w) { document.getElementById('deck').appendChild(w); if (typeof fitSlides === 'function') fitSlides(); } } catch (e) {} }, id); // eslint-disable-line no-undef
-        await page.waitForTimeout(300); el = await page.$(`#deck > [data-id="${id}"] .slide`);
-      }
-      if (!el) { console.log('missing', id); continue; }
-      await el.scrollIntoViewIfNeeded(); await page.waitForTimeout(120);
-      const file = path.join(outdir, `${id}.png`); await el.screenshot({ path: file }); console.log(file);
-    }
-    errors.forEach((e) => console.log('PAGE ERROR', e));
-    await browser.close(); return;
-  }
-  if (cmd === 'audit') {
-    const { browser, page, errors } = await open(slug);
-    const res = await page.evaluate(() => {
-      const out = [], wraps = [...document.getElementById('deck').children].filter((n) => n.dataset && n.dataset.id);
-      const hit = (a, b) => { const x = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)), y = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)); return x * y; };
-      wraps.forEach((w, k) => {
-        const id = w.dataset.id, sl = w.querySelector('.slide'); if (!sl) return; const R = sl.getBoundingClientRect(), tag = `${k + 1} ${id}`;
-        sl.querySelectorAll('*').forEach((n) => {
-          if (n.closest('.ctrls, .slide-tag') || (n.closest('svg') && n.tagName.toLowerCase() !== 'svg')) return;
-          if (n.tagName === 'IMG' && n.parentElement.classList.contains('pp-pic')) return;   // a cropped picture: its frame clips it, and the frame is checked
-          const r = n.getBoundingClientRect(); if (!r.width || !r.height) return;
-          const over = Math.max(R.left - r.left, r.right - R.right, R.top - r.top, r.bottom - R.bottom);
-          if (over > 2) out.push(`${tag}: <${n.tagName.toLowerCase()}> runs ${Math.round(over)}px past the slide edge`);
-          const cs = getComputedStyle(n);
-          if (cs.overflow !== 'visible' && !n.classList.contains('pp-pic') && n.clientHeight > 0 && n.scrollHeight > n.clientHeight + 3) out.push(`${tag}: <${n.tagName.toLowerCase()}> cuts off its text`);
-        });
-        sl.querySelectorAll('svg').forEach((svg) => {
-          const S = svg.getBoundingClientRect();
-          const texts = [...svg.querySelectorAll('text')].map((t) => ({ t, r: t.getBoundingClientRect() })).filter((x) => x.r.width && x.r.height && x.t.textContent.trim());
-          texts.forEach(({ t, r }) => { const over = Math.max(S.left - r.left, r.right - S.right, S.top - r.top, r.bottom - S.bottom); if (over > 3) out.push(`${tag}: label “${t.textContent.trim().slice(0, 40)}” runs ${Math.round(over)}px outside its figure`); });
-          for (let i = 0; i < texts.length; i++) for (let j = i + 1; j < texts.length; j++) {
-            const a = texts[i].r, b = texts[j].r, area = hit(a, b), small = Math.min(a.width * a.height, b.width * b.height);
-            if (small && area / small > 0.18) out.push(`${tag}: labels overlap: “${texts[i].t.textContent.trim().slice(0, 30)}” and “${texts[j].t.textContent.trim().slice(0, 30)}”`);
-          }
-        });
-      });
-      return { n: wraps.length, out };
-    });
-    // the guides: two-line titles and the protected border (static/guides.js, the same check the page draws)
-    await page.addScriptTag({ path: path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'static', 'guides.js') });
-    const guides = await page.evaluate(() => [...document.getElementById('deck').children].filter((n) => n.dataset && n.dataset.id).flatMap((w, k) => {
-      const sl = w.querySelector('.slide'); return sl ? window.SBGuides.issues(sl).map((g) => `${k + 1} ${w.dataset.id}: ${g.msg}`) : [];
-    }));
-    console.log(`slides: ${res.n}`); res.out.forEach((l) => console.log(l)); guides.forEach((l) => console.log(l)); errors.forEach((e) => console.log('PAGE ERROR', e));
-    if (!res.out.length && !guides.length) console.log('No overflow, overlapping labels, long titles, or anything in the protected border.');
-    await browser.close(); return;
-  }
-  if (cmd === 'export') {
-    const out = args.shift();
-    const { browser, page, errors } = await open(slug, 1600, withEdits);
-    await page.emulateMedia({ media: 'print' }); await page.waitForTimeout(600);
-    await page.pdf({ path: out, preferCSSPageSize: true, printBackground: true });
-    errors.forEach((e) => console.log('PAGE ERROR', e));
-    console.log(out); await browser.close(); return;
-  }
-  if (cmd === 'thumb') {
-    const out = args.shift();
-    const { browser, page } = await open(slug);
-    const el = await page.$('#deck > [data-id] .slide');
-    if (el) await el.screenshot({ path: out });
-    console.log(out); await browser.close(); return;
-  }
-  console.log('usage: node browser.mjs titles|edits|proposals|shot|audit|export|thumb <slug> ...  |  node browser.mjs chrome');
-  process.exitCode = 2;
+  if (args[0] === '--worker') { if (args[1]) await worker(paths(args[1])); return; }
+  const w = args[0] !== 'chrome' && CWD && where();
+  const res = (w && privateDir(w.dir) && await viaWorker(w)) || await direct();
+  process.stdout.write(res.out);
+  if (res.error) console.error(res.error);
+  process.exitCode = res.code;
 }
 main().catch((e) => { console.error(e.message); process.exitCode = 1; });

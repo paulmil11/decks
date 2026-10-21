@@ -156,6 +156,7 @@ copy `config.example.json` to `config.json`, or set environment variables (they 
 | A different config file | | `SB_CONFIG` |
 | Where `sb` finds the server | | `SB_URL` |
 | Chrome for the headless jobs | | `SB_CHROME` |
+| Keep one headless Chrome open between jobs (`0` turns it off) | | `SB_BROWSER_WORKER` |
 
 `python3 server.py --port 8799` changes the port for one run.
 

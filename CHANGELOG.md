@@ -7,6 +7,10 @@ restart the server. To hear about new versions, watch this repository on GitHub
 ## Unreleased
 
 - Screen recordings of an open deck no longer blink every few seconds when the deck sits idle.
+- `sb shot`, `sb audit`, `sb export`, Download PDF, and dashboard thumbnails share one headless
+  Chrome instead of starting their own each time, which takes about half a second off each one.
+  A private worker keeps Chrome open and quits after two idle minutes; `SB_BROWSER_WORKER=0`
+  turns it off. Thanks to @delirious6423, whose pull request designed the worker.
 
 ## 0.9.0 (October 20, 2026)
 
