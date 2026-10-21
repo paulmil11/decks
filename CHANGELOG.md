@@ -4,6 +4,14 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
+## Unreleased
+
+- `sb shot`, `sb audit`, `sb export`, Download PDF, and dashboard thumbnails wait until the deck
+  has finished drawing (fonts, pictures, animations) instead of pausing a fixed time. A
+  screenshot or an audit takes about 0.6 seconds instead of 2, and `sb export` under 2 seconds
+  instead of 6. Screenshots and PDFs come out the same. A slide that draws itself later, like a
+  chart that loads its data, can set `window.__DECK_READY` to a promise, and they wait for it.
+
 ## 0.10.0 (October 21, 2026)
 
 - Screen recordings of an open deck no longer blink every few seconds when the deck sits idle.

@@ -30,6 +30,55 @@ export function chrome() {
 
 export const launch = () => chromium.launch({ executablePath: chrome(), headless: true });
 
+// Before the page's own scripts: count the frames the page asks for, so settled() can tell when a
+// chart that draws itself frame by frame has stopped.
+const countFrames = () => {
+  const raf = window.requestAnimationFrame, asks = { n: 0 };
+  window.requestAnimationFrame = function (cb) { asks.n++; return raf.call(window, cb); };
+  Object.defineProperty(window, '__sbFrames', { value: { asks, next: () => new Promise((r) => raf.call(window, () => r())) } });
+};
+
+// In the page: resolves once it has finished drawing. The Decks shell has set sb-ready (it runs on
+// ?readonly=1 pages; a ?raw=1 page has none), the deck's own window.__DECK_READY promise has settled
+// if it has one (for a chart drawn later), fonts are in, every picture has loaded, the slides' CSS
+// animations have finished, and the page has stopped asking for frames (2 s a page at most). Pictures
+// aren't decode()d: that makes Chrome scale them down from the full decode, sharper than a browser
+// shows the deck.
+const settled = async () => {
+  const F = window.__sbFrames, frame = F ? F.next : () => new Promise((r) => requestAnimationFrame(() => r()));
+  while (window.__SB && !document.body.classList.contains('sb-ready')) await frame();
+  if (window.__DECK_READY) await Promise.resolve(window.__DECK_READY).catch(() => {});
+  await document.fonts.ready;
+  await frame();   // layout has run, so a lazy picture in view has started loading
+  const inView = (im) => { const r = im.getBoundingClientRect(); return r.width && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; };
+  const loaded = (im) => im.complete || new Promise((r) => { im.addEventListener('load', r, { once: true }); im.addEventListener('error', r, { once: true }); });
+  await Promise.all([...document.images].filter((im) => im.loading !== 'lazy' || inView(im)).map(loaded));
+  const deck = document.getElementById('deck');
+  await Promise.all(document.getAnimations().filter((a) => a.playState === 'running' && a.effect && a.effect.getComputedTiming().endTime < Infinity
+    && (!deck || deck.contains(a.effect.target))).map((a) => a.finished.catch(() => {})));
+  for (;;) {
+    const n = F ? F.asks.n : 0, t = performance.now();
+    await frame(); await frame();
+    if (!F || F.asks.n === n) break;
+    F.waited = (F.waited || 0) + performance.now() - t;
+    if (F.waited > 2000) break;   // a looping animation never stops asking
+  }
+};
+
+// Wait for the page to be ready instead of pausing a fixed time: nothing loading, then settled().
+// Fonts and pictures can start more loads, so it goes round until a pass ends with nothing loading.
+async function ready(page, loading) {
+  const end = Date.now() + 30000;
+  const late = () => new Error('The deck was still loading after 30 seconds');
+  for (;;) {
+    while (loading.size) { if (Date.now() > end) throw late(); await new Promise((r) => setTimeout(r, 10)); }
+    let timer;
+    try { await Promise.race([page.evaluate(settled), new Promise((_, no) => { timer = setTimeout(() => no(late()), Math.max(0, end - Date.now())); })]); }
+    finally { clearTimeout(timer); }
+    if (!loading.size) return;
+  }
+}
+
 // One job: argv as browser.mjs got it, the server at base, Chrome from browser() (started on first use).
 // Returns what it printed, an error if it stopped on one, and the exit code.
 export async function run(argv, { base: BASE, browser }) {
@@ -46,17 +95,22 @@ export async function run(argv, { base: BASE, browser }) {
     if (deck.error) throw new Error(`no deck ${slug}`);
     const context = await (await browser()).newContext({ viewport: { width, height: 1000 } });
     contexts.push(context);
+    await context.addInitScript(countFrames);
     const page = await context.newPage();
-    const errors = [];
+    const errors = [], loading = new Set();
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.goto(`${BASE}${deck.url}?${withState ? 'readonly=1' : 'raw=1'}`, { waitUntil: 'networkidle' });
-    await page.evaluate(() => document.fonts.ready);
+    page.on('request', (r) => loading.add(r));
+    page.on('requestfinished', (r) => loading.delete(r));
+    page.on('requestfailed', (r) => loading.delete(r));
+    const settle = () => ready(page, loading);
+    await page.goto(`${BASE}${deck.url}?${withState ? 'readonly=1' : 'raw=1'}`, { waitUntil: 'load' });
+    await settle();
     if (version) {
       const ok = await page.evaluate((v) => { const s = document.querySelector('.sidebar select'); if (!s || ![...s.options].some((o) => o.value === v)) return false; s.value = v; s.dispatchEvent(new Event('change', { bubbles: true })); return true; }, version);
       if (!ok) throw new Error(`no version ${version}`);
+      await settle();
     }
-    await page.waitForTimeout(900);
-    return { context, page, deck, errors };
+    return { context, page, deck, errors, settle };
   }
 
   const order = (page) => page.evaluate(() => [...document.getElementById('deck').children].filter((n) => n.dataset && n.dataset.id).map((w, i) => {
@@ -158,15 +212,15 @@ export async function run(argv, { base: BASE, browser }) {
     }
     if (cmd === 'shot') {
       const outdir = args.shift(); fs.mkdirSync(outdir, { recursive: true });
-      const { context, page, errors } = await open(slug);
+      const { context, page, errors, settle } = await open(slug);
       for (const id of args) {
         let el = await page.$(`#deck > [data-id="${id}"] .slide`);
         if (!el) {   // a slide outside this version: build it at the end of the deck
           await page.evaluate((id) => { try { const w = build(id); if (w) { document.getElementById('deck').appendChild(w); if (typeof fitSlides === 'function') fitSlides(); } } catch (e) {} }, id); // eslint-disable-line no-undef
-          await page.waitForTimeout(300); el = await page.$(`#deck > [data-id="${id}"] .slide`);
+          await settle(); el = await page.$(`#deck > [data-id="${id}"] .slide`);
         }
         if (!el) { log('missing', id); continue; }
-        await el.scrollIntoViewIfNeeded(); await page.waitForTimeout(120);
+        await el.scrollIntoViewIfNeeded(); await settle();
         const file = path.join(outdir, `${id}.png`); await el.screenshot({ path: file }); log(file);
       }
       errors.forEach((e) => log('PAGE ERROR', e));
@@ -211,8 +265,8 @@ export async function run(argv, { base: BASE, browser }) {
     }
     if (cmd === 'export') {
       const out = args.shift();
-      const { context, page, errors } = await open(slug, 1600, withEdits);
-      await page.emulateMedia({ media: 'print' }); await page.waitForTimeout(600);
+      const { context, page, errors, settle } = await open(slug, 1600, withEdits);
+      await page.emulateMedia({ media: 'print' }); await settle();
       await page.pdf({ path: out, preferCSSPageSize: true, printBackground: true });
       errors.forEach((e) => log('PAGE ERROR', e));
       log(out); await context.close(); return;
