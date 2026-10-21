@@ -1246,7 +1246,7 @@
 
   // ---------- agent-friendly handle (Claude can drive the page with this) ----------
   window.SlideBuilder = {
-    go, step, setView, say, shareItem, current: () => cur, decide, undo: undoDecision, flip, proposals: () => Object.keys(lib()).filter(origOf).map((p) => ({ p, o: origOf(p), option: optionsOf(origOf(p)).indexOf(p) + 1, of: optionsOf(origOf(p)).length, decision: (decisionOf(p) || {}).d || null })), filter: (f) => { filter = f; refresh(); }, order: (ids) => saveOrder(ids), title, hidden: (id) => clientOnly.has(id),
+    go, step, setView, say, shareItem, menuItem: item, menuSep: sep, current: () => cur, decide, undo: undoDecision, flip, proposals: () => Object.keys(lib()).filter(origOf).map((p) => ({ p, o: origOf(p), option: optionsOf(origOf(p)).indexOf(p) + 1, of: optionsOf(origOf(p)).length, decision: (decisionOf(p) || {}).d || null })), filter: (f) => { filter = f; refresh(); }, order: (ids) => saveOrder(ids), title, hidden: (id) => clientOnly.has(id),
     slides: () => wraps().map((w, k) => Object.assign({ n: k + 1, id: w.dataset.id, title: title(w.dataset.id) }, (({ text, st, changed, hold }) => ({ comment: text, reply: st, changed, draft: hold }))(info(w.dataset.id)))),
   };
 

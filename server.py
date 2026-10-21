@@ -28,14 +28,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import newdeck
+import shrink
 import sbconfig
 
 APP = Path(__file__).resolve().parent
 STATIC = APP / 'static'
 LOCK = threading.Lock()
+SHRINKING = threading.Lock()   # one Shrink file size at a time
 STARTED = time.time()
 VERSION = '0.10.3'   # see CHANGELOG.md
 UPDATE_REPO = 'paulmil11/decks'   # where new versions are released (a fork points this at its own)
@@ -505,9 +507,10 @@ def bundle_copy(deck, html, code_paths=True):
     html = re.sub(r'<script\b([^>]*?)\s+src="([^"]+)"([^>]*)>\s*</script>', script, html)
 
     found = set()
+    gone = shrink.moved(root)   # a picture Shrink file size renamed, still named the old way (an edit saved before it)
     # any character a path can't hold ends its name: 'img/a.jpg|img/b.jpg', or href=\"img/a.jpg\" in a figure a review copy writes out
     for rel in re.findall(r'(?<![\w%./-])(?:\./)?([\w%-][\w%./-]*\.' + IMG_EXT + r')(?![\w%./-])', html):
-        if inside(rel):
+        if inside(rel) or (rel in gone and inside(gone[rel])):
             found.add(rel)
     for pre, post in re.findall(r'`((?:[\w-]+/)*[\w.-]*)\$\{[^}`]*\}([\w.-]*\.' + IMG_EXT + r')`', html) if code_paths else ():
         folder = root / os.path.dirname(pre)
@@ -516,7 +519,7 @@ def bundle_copy(deck, html, code_paths=True):
                 found.add(str(f.relative_to(root)))
     assets = {}
     for rel in sorted(found):
-        f = inside(rel)
+        f = inside(rel) or inside(gone[rel])
         ext = f.suffix.lower().lstrip('.')
         assets[rel] = f'data:{MIME.get(ext, "application/octet-stream")};base64,' + base64.b64encode(f.read_bytes()).decode()
     head = '<script>window.__SB_ASSETS=' + json.dumps(assets).replace('</', '<\\/') + ';' + ASSET_JS + '</script>'
@@ -556,7 +559,8 @@ SHELL_TAG = ('<script id="sb-shell" src="/_sb/shell.js?v={v}" defer></script>'  
              '<script id="sb-addslide" src="/_sb/addslide.js?v={v}" defer></script>'
              '<script id="sb-pictures" src="/_sb/pictures.js?v={v}" defer></script>'
              '<script id="sb-clientcopy" src="/_sb/clientcopy.js?v={v}" defer></script>'
-             '<script id="sb-reviewcopy" src="/_sb/reviewcopy.js?v={v}" defer></script>')
+             '<script id="sb-reviewcopy" src="/_sb/reviewcopy.js?v={v}" defer></script>'
+             '<script id="sb-shrink" src="/_sb/shrink.js?v={v}" defer></script>')
 
 
 def static_version():
@@ -712,6 +716,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.serve_file(sb_dir(deck) / 'thumb.png', cache=True)
             if what == 'pulse':
                 return self.json(200, pulse_of(deck))
+            if what == 'shrink':   # Share › Shrink file size: what could be smaller; changes nothing
+                return self.json(200, shrink.scan(deck, load_registry()['decks']))
             return self.json(404, {'error': 'unknown'})
         m = re.match(r'^/d/([a-z0-9-]+)/(.*)$', path)
         if m:
@@ -729,9 +735,11 @@ class Handler(BaseHTTPRequestHandler):
                     snap = pulse_of(deck)   # before reading, so a change made while serving still counts as new
                     html = target.read_text(encoding='utf-8')
                     return self.send(200, inject(html, deck, rel, snap), 'text/html; charset=utf-8')
+                if not target.exists() and rel in (gone := shrink.moved(deck['path'])):   # renamed by Shrink file size
+                    return self.send(302, extra={'Location': f"/d/{deck['slug']}/" + '/'.join(quote(x) for x in gone[rel].split('/'))})
             except (OSError, ValueError):
                 return self.send(404, 'Not found')
-            return self.serve_file(target, cache=target.suffix.lower() in ('.png', '.jpg', '.jpeg', '.svg', '.woff2'))
+            return self.serve_file(target, cache=target.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp', '.svg', '.woff2'))
         if re.match(r'^/d/([a-z0-9-]+)$', path):
             return self.send(302, extra={'Location': path + '/'})
         self.send(404, 'Not found')
@@ -837,6 +845,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(400, {'error': str(e)})
             except OSError as e:
                 return self.json(500, {'error': f'Could not move the folder to the Trash: {e}'})
+        if what == 'shrink':   # Share › Shrink file size, and sb shrink: {op: 'apply', ids} or {op: 'undo'}
+            if not SHRINKING.acquire(blocking=False):
+                return self.json(409, {'error': 'Another shrink is running. Try again in a moment.'})
+            try:
+                by = 'sb' if body.get('by') == 'sb' else 'page'
+                if body.get('op') == 'apply':
+                    ids = body.get('ids')
+                    if ids is not None and not (isinstance(ids, list) and all(isinstance(i, str) for i in ids)):
+                        return self.json(400, {'error': 'ids: a list of what to shrink'})
+                    return self.json(200, shrink.apply(deck, load_registry()['decks'], ids, lock=LOCK, by=by))
+                if body.get('op') == 'undo':
+                    return self.json(200, shrink.undo(deck, str(body.get('batch') or '') or None, lock=LOCK, by=by))
+                return self.json(400, {'error': "op: 'apply' or 'undo'"})
+            except ValueError as e:
+                return self.json(400, {'error': str(e)})
+            except OSError as e:
+                return self.json(500, {'error': str(e)})
+            finally:
+                SHRINKING.release()
         if what == 'bundle':
             html = body.get('html')
             if not isinstance(html, str) or not html.strip():

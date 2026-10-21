@@ -4,6 +4,16 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
+## Unreleased
+
+- **Shrink file size** (the last item in Share, or `sb shrink <deck>`) lists what makes a deck
+  heavy, with what each change saves, and shrinks what you leave ticked. Photos saved as PNG
+  become JPEGs, see-through PNGs and drawings become WebP, pictures larger than a slide ever
+  shows them get smaller, and pictures written into the deck file move to `img/`. Pictures no
+  slide uses and older PDF exports leave the folder. On a talk deck, the pictures went from
+  11.2 MB to 8.1 MB and every slide looked the same; an imported deck's would go from 28 MB to
+  10 MB. The originals are kept, and Undo puts everything back. It needs Pillow.
+
 ## 0.10.3 (October 21, 2026)
 
 - Checks finds the titles on slides built from PowerPoint, like the consulting template's.

@@ -324,6 +324,20 @@ import is kept in `.slidebuilder/imports/`.
 `sb export` prints the deck file to PDF. If the browser holds edits that aren't in the
 file yet, it says so; `--with-edits` prints what the browser shows instead.
 
+**Shrink file size**, the last item in Share (or `sb shrink <deck>`), lists what makes the
+deck heavy, with what each change saves, and shrinks what you leave ticked. Photos saved as
+PNG become JPEGs. PNGs with a see-through background, drawings, charts, and screenshots
+become WebP; drawings and screenshots keep every pixel. Pictures larger than a slide ever
+shows them (past twice the slide, 2000 × 1125) get smaller, JPEGs saved above quality 90 drop
+to 85, and pictures written into the deck file move to `img/`. For a tidy folder, it also
+moves out pictures no slide uses and older PDF exports outside `_archive/`; neither is in the
+deck or the copies you send. A picture that changes format gets a new name, and the deck
+file, the scripts it loads, and your saved edits follow; one the deck names in code (like
+`img/ct-${n}.jpg`) keeps its name and format. Nothing is deleted: the originals go to
+`.slidebuilder/originals/<time>/`, the change is committed, and Undo (or
+`sb shrink <deck> --undo`) puts it back. It needs Pillow (`python3 -m pip install Pillow`);
+without it, the list still shows and only the folder tidying runs.
+
 ### Two tabs and a dropped connection don't lose your work
 
 Each save carries what the page started from, and the server merges it with anything
@@ -445,6 +459,7 @@ Run it from this folder (or by its full path). It talks to the running server.
 | `sb new "<name>" --from <file.pptx\|file.pdf> [--rebuild]` | Import a deck you already have (see Importing a deck) |
 | `sb hide <deck>` / `sb show <deck>` | Take a deck off the dashboard, or put it back |
 | `sb delete <deck> --yes` | Delete a deck (a deck this app made goes to the Trash) |
+| `sb shrink <deck> [--dry-run] [--only a,b] [--skip a,b] [--undo]` | Share › Shrink file size: smaller pictures and a tidier folder; `--dry-run` lists it, `--undo` puts the last one back |
 
 ## Run it at login (optional)
 
@@ -475,7 +490,8 @@ systemctl --user enable --now decks
 | `sb` | The agent's command line |
 | `newdeck.py` | Themes, templates, and new decks (used by the server and `sb new`) |
 | `templates/` | `_engine/engine.html` (the deck engine), `_engine/basics.js`, and one folder per template |
-| `static/` | The browser shell: `boot.js`, `shell.js`, `shell.css`, `guides.js`, `addslide.js`, `pictures.js`, `clientcopy.js`, and `dashboard.html` |
+| `static/` | The browser shell: `boot.js`, `shell.js`, `shell.css`, `guides.js`, `addslide.js`, `pictures.js`, `clientcopy.js`, `shrink.js`, and `dashboard.html` |
+| `shrink.py` | Share › Shrink file size: what's heavy, the smaller copies (Pillow), and undo |
 | `tools/browser.mjs` | Headless Chrome jobs behind `sb`: titles, edits, proposals, shots, audit, PDF, and thumbnails |
 | `tools/proposals.py` | `sb proposals`: which proposals won't show where their original shows; `--fix-placement` files them next to it, and `--bake` writes accept / keep decisions into the deck file's JavaScript, touching code only, never a slide's words |
 | `tools/pptx2native.py` | Converts PowerPoint slides into editable native slides (how the consulting starter was made) |
@@ -510,6 +526,8 @@ API (what `sb` uses):
 - `GET /api/decks/<slug>/pulse`: modified times, polled by the page for live updates.
 - `GET /api/templates`, `POST /api/new-deck`: templates and new decks.
 - `POST /api/decks/<slug>/manage`: `{op: 'hide' | 'show' | 'delete'}`.
+- `GET /api/decks/<slug>/shrink`: what Shrink file size would do (changes nothing). `POST` it
+  `{op: 'apply', ids}` (the items to do; all of them when left out) or `{op: 'undo'}`.
 - `POST /api/decks/<slug>/bundle`: a copy of the deck with its pictures and scripts embedded.
 - `POST /api/decks/<slug>/upload`: a picture for a slide, saved in the deck's `img/uploads/`.
 - `POST /api/check-updates`: asks GitHub now which release is newest (the Check for updates button).

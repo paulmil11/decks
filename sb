@@ -33,6 +33,15 @@
                                             won't show where their original shows
   sb export <deck> [--version v] [--with-edits]  next numbered PDF (the deck file; --with-edits: as the browser shows it)
   sb thumb <deck>                           refresh the dashboard thumbnail
+  sb shrink <deck> [--dry-run] [--only a,b] [--skip a,b] [--undo]
+                                            Share › Shrink file size: photos saved as PNG become JPEGs, cutouts
+                                            WebP, pictures past twice the slide (2000 x 1125) smaller, pictures
+                                            written into the deck file go to img/; for a tidy folder, pictures
+                                            no slide uses leave img/ and older PDF exports go to _archive/.
+                                            Renamed pictures are renamed in the deck file and saved edits too.
+                                            The originals go to .slidebuilder/originals/<time>/, and it commits.
+                                            --dry-run lists it all and changes nothing; --only/--skip take
+                                            the paths it lists; --undo puts the last shrink back.
   sb commit <deck> <message>                save the deck folder to version history
   sb url <deck>
   sb watch [<deck>]                         wait until you click Process now in a deck (any deck, or the one named),
@@ -75,11 +84,11 @@ APP = Path(__file__).resolve().parent
 TOOLS = APP / 'tools'
 
 
-def call(method, path, data=None):
+def call(method, path, data=None, timeout=30):
     req = urllib.request.Request(BASE + path, method=method, headers={'Content-Type': 'application/json'},
                                  data=json.dumps(data).encode() if data is not None else None)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b'{}')
     except urllib.error.HTTPError as e:   # the server answered: say what it said
         try: msg = json.loads(e.read() or b'{}').get('error') or str(e)
@@ -716,6 +725,50 @@ def proposals_cmd(slug, bake=False):
         sys.exit(1)
 
 
+def shrink_cmd(slug, argv):
+    """sb shrink: Share › Shrink file size from the command line (the server does the work, as for the page)."""
+    def size(n):
+        return f'{n / 1e6:.1f} MB' if n >= 950_000 else f'{round(n / 1000)} KB'
+    if '--undo' in argv:
+        r = call('POST', f'/api/decks/{slug}/shrink', {'op': 'undo', 'by': 'sb'}, timeout=600)
+        print(f"Undone ({r['batch']}): {len(r['back'])} file{'s' * (len(r['back']) != 1)} back as they were"
+              + (f", commit {r['commit']}" if r.get('commit') else '') + '.')
+        for p in r['problems']:
+            print('  not put back:', p)
+        return
+    only = {x for v in opt(argv, '--only', multi=True) for x in v.split(',') if x}
+    skip = {x for v in opt(argv, '--skip', multi=True) for x in v.split(',') if x}
+    d = call('GET', f'/api/decks/{slug}/shrink', timeout=600)
+    key = lambda it: it['id'].split(':', 1)[1] if it['kind'] == 'pdf' else it['file']
+    items = [it for it in d['items'] if (not only or key(it) in only or it['id'] in only) and key(it) not in skip and it['id'] not in skip]
+    pics = [it for it in items if it['inDeck']]
+    tidy = [it for it in items if not it['inDeck']]
+    saves = sum(it['size'] - it['after'] for it in pics)
+    if not d['pillow']:
+        print('Pillow is missing, so pictures stay as they are (python3 -m pip install Pillow).')
+    if '--dry-run' in argv or not items:
+        print(f"Pictures on the slides: {size(d['weight'])}" + (f" → {size(d['weight'] - saves)} (saves {size(saves)})" if pics else ', nothing to shrink'))
+        w = max([len(key(it)) for it in items] + [10])
+        for it in pics:
+            print(f"  {key(it):{w}}  {size(it['size']):>7} → {size(it['after']):>7}  {it['to'] if it['to'] != it['file'] else '(same name)'}\n  {'':{w}}  {it['why']}")
+        if tidy:
+            print('Tidy the folder (not in the deck or the copies you send):')
+            for it in tidy:
+                print(f"  {key(it):{w}}  {size(it['size']):>7}  {it['why']} → {it['to'] if it['kind'] == 'pdf' and it['to'] else '.slidebuilder/originals/'}")
+        if d.get('last'):
+            print(f"The last shrink ({d['last']['batch']}) can be undone: sb shrink {slug} --undo")
+        if items and '--dry-run' in argv:
+            print(f'Nothing changed. To do it: sb shrink {slug}' + (' (with the same --only/--skip)' if only or skip else ''))
+        return
+    r = call('POST', f'/api/decks/{slug}/shrink', {'op': 'apply', 'ids': [it['id'] for it in items], 'by': 'sb'}, timeout=600)
+    print(r['summary'])
+    for x in r['refs']:
+        print(f"  {x['file']}: {x['n']} reference{'s' * (x['n'] != 1)} renamed")
+    if r.get('batch'):
+        print(f"Originals: .slidebuilder/originals/{r['batch']}/" + (f"  commit {r['commit']}" if r.get('commit') else '  (not committed: no git repo, or nothing to commit)'))
+        print(f'Undo: sb shrink {slug} --undo')
+
+
 def watch(slug=None):
     """Wait for a Process now click in the deck (or, with no deck, in any deck), then exit saying which.
     Run it in the background; after the round, start it again."""
@@ -789,7 +842,7 @@ def main(argv):
         print(f"{d['slug']}  {BASE}{d['path']}\n{d['folder']}\n\n{d['prompt']}")
         return
 
-    known = ('url', 'watch', 'comments', 'edits', 'proposals', 'import', 'working', 'reply', 'status', 'idle', 'round', 'shot', 'audit', 'export', 'thumb', 'commit', 'hide', 'show', 'delete')
+    known = ('url', 'watch', 'comments', 'edits', 'proposals', 'import', 'working', 'reply', 'status', 'idle', 'round', 'shot', 'audit', 'export', 'thumb', 'commit', 'hide', 'show', 'delete', 'shrink')
     if cmd not in known:
         sys.exit(f'unknown command {cmd!r}\n' + __doc__)
     if cmd == 'watch' and not rest:
@@ -938,6 +991,8 @@ def main(argv):
         r = call('POST', f'/api/decks/{slug}/manage', {'op': cmd})
         print({'hide': f'Hidden: {slug} (sb show {slug} brings it back).', 'show': f'Back on the dashboard: {slug}.'}.get(cmd)
               or (f"Deleted {slug}: its folder is in the Trash ({r['trashed']})." if r.get('trashed') else f'Removed {slug} from the dashboard. Its files are untouched.'))
+    elif cmd == 'shrink':
+        shrink_cmd(slug, rest)
     elif cmd == 'thumb':
         _, path = folder(slug)
         print(node('thumb', slug, str(path / '.slidebuilder' / 'thumb.png')), end='')
