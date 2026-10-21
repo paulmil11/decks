@@ -4,6 +4,10 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
+## Unreleased
+
+- Screen recordings of an open deck no longer blink every few seconds when the deck sits idle.
+
 ## 0.9.0 (October 20, 2026)
 
 - **Proposed slides you can accept or keep.** When Claude suggests a new version of one of

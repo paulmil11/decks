@@ -383,7 +383,9 @@
   let updBox = null, updSeen = ''; try { updSeen = localStorage.getItem('__decks_upd_seen') || ''; } catch (e) {}
   function updateNote(u) {
     const qb = $('#sb-q > .sb-ddb');
-    if (!u) { if (updBox) { updBox.remove(); updBox = null; } qb.classList.remove('sb-newdot'); return; }
+    // the pulse calls this every 2.5 s: touch the page only when something changed (even a same-value write
+    // repaints, and screen recordings of the page then blink)
+    if (!u) { if (updBox) { updBox.remove(); updBox = null; } if (qb.classList.contains('sb-newdot')) qb.classList.remove('sb-newdot'); return; }
     if (updBox && updBox.dataset.v === u.version) return;
     if (updBox) updBox.remove();
     const row = item('sb-q', { t: `Decks ${u.version} is out`, sub: 'Click to copy a prompt that updates it, for Claude Code or Codex', act: async () => {
@@ -416,9 +418,11 @@
   let watched = false;
   function askButton(p) {
     watched = !!(p && p.watching); const b = $('#sb-ask'); if (!b) return;
-    const queued = watched && p.asked;
-    b.querySelector('.sb-ask-l').textContent = queued ? 'Queued…' : watched ? 'Process now' : 'Ask Claude';
-    b.title = queued ? 'Claude starts as soon as it finishes what it’s doing (' + SEND + ')' : watched ? 'Claude is watching this deck in Claude Code. Click to start a round (' + SEND + ').' : 'Copy a prompt that asks Claude (or Codex) to work through your comments (' + SEND + ')';
+    const queued = watched && p.asked, l = b.querySelector('.sb-ask-l');
+    const text = queued ? 'Queued…' : watched ? 'Process now' : 'Ask Claude';
+    const title = queued ? 'Claude starts as soon as it finishes what it’s doing (' + SEND + ')' : watched ? 'Claude is watching this deck in Claude Code. Click to start a round (' + SEND + ').' : 'Copy a prompt that asks Claude (or Codex) to work through your comments (' + SEND + ')';
+    if (l.textContent !== text) l.textContent = text;   // only when it changed: the pulse calls this every 2.5 s
+    if (b.title !== title) b.title = title;
   }
   $('#sb-ask').addEventListener('click', async () => {
     if (watched) {
