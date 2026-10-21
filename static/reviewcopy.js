@@ -236,7 +236,9 @@ if(document.readyState==='complete')setTimeout(go,400);else window.addEventListe
     Object.assign(pv, { default: true, blocks: kept });
     const parts = new Set(libIds.map((id) => L[id].cat)), only = (o) => { const r = {}; Object.keys(o).forEach((k) => { if (parts.has(k)) r[k] = o[k]; }); return r; };
     const C = get(() => CATS), CL = get(() => CAT_LABELS), CS = get(() => CAT_SHORT);   // eslint-disable-line no-undef
-    const swaps = { LIBRARY: libLit, PITCHES: lit({ [v]: pv }), TEMPLATE_PITCHES: '{}', FIGS: figLit, DONE_FB: '[]', PREV_DEFAULTS: '{}',
+    // the copy opens on the one version it holds: an older engine falls back to a fixed version
+    // when the address doesn't name one ('day', say), and the copy leaves that version out
+    const swaps = { LIBRARY: libLit, PITCHES: lit({ [v]: pv }), TEMPLATE_PITCHES: '{}', FIGS: figLit, DONE_FB: '[]', PREV_DEFAULTS: '{}', current: lit(v),
       CATS: Array.isArray(C) ? lit(C.filter((c) => parts.has(c))) : null, CAT_LABELS: CL && typeof CL === 'object' ? lit(only(CL)) : null, CAT_SHORT: CS && typeof CS === 'object' ? lit(only(CS)) : null };
 
     let html = setSaved(html0, 'null').replace(/<script id="review-copy" type="application\/json">[\s\S]*?<\/script>\n?/g, ''), engine = html;
@@ -245,9 +247,9 @@ if(document.readyState==='complete')setTimeout(go,400);else window.addEventListe
     const missing = ['LIBRARY', 'PITCHES'].concat(figLit ? ['FIGS'] : []).filter((n) => !at[n]);
     if (missing.length) throw new Stop(`Couldn’t find where the deck’s source sets ${missing.join(' and ')}, so a review copy can’t leave the rest out.`);
     Object.keys(at).filter((n) => at[n]).sort((a, b) => at[b][0] - at[a][0]).forEach((n) => {
-      const [s, e] = at[n];
+      const [s, e] = at[n], kw = html.slice(s, s + 5).match(/^(?:const|let|var)/)[0];   // `let current` stays a let: the engine changes it
       engine = engine.slice(0, s) + engine.slice(e);
-      html = html.slice(0, s) + `const ${n} = ${swaps[n]};` + html.slice(e);
+      html = html.slice(0, s) + `${kw} ${n} = ${swaps[n]};` + html.slice(e);
     });
     // the basic layouts behind Add a slide: decks made from a template add them to LIBRARY in a block
     // of their own (templates/_engine/basics.js). Any of them on screen is in the LIBRARY written above.
