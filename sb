@@ -4,8 +4,14 @@
   sb decks                                  every deck, with open comments
   sb comments <deck> [--all]                comments to act on (numbered like the deck); --all adds drafts
   sb edits <deck> [--version v]             the reviewer's inline text edits and slide moves (read-only)
-  sb proposals <deck> [--bake]              proposed slides (prop:true) and the reviewer's decision on each: accept,
-                                            or keep the original. --bake writes the decided ones into the deck file
+  sb proposals <deck> [--bake | --fix-placement]
+                                            proposed slides (prop:true) and the reviewer's decision on each: accept,
+                                            or keep the original. It first names any proposal that won't show where
+                                            its original shows (another cat, alt/fac/only its original lacks, apart
+                                            from it in LIBRARY, or missing from a version that lists the original
+                                            by hand). --fix-placement files those right after their original, with
+                                            its cat and flags, and checks the result. --bake writes the decided
+                                            ones into the deck file
                                             (accept: the original becomes an extra and the proposal takes its
                                             place in every version; keep: the proposal is deleted), checks the
                                             result, and puts the file back if anything is off
@@ -19,9 +25,12 @@
   sb reply <deck> <slide> <done|question|skipped> <text>
   sb status <deck> <text> [--done N --total M]   the live line in the reviewer's top bar
   sb idle <deck>                            clear the live line
-  sb round <deck> --summary S [--changed slide="what changed" ...] [--export v13]
+  sb round <deck> --summary S [--changed slide="what changed" ...] [--export v13] [--force]
+                                            refuses while a proposed slide won't show where its original shows
+                                            (sb proposals <deck> --fix-placement); --force records it anyway
   sb shot <deck> [--version v] [--out DIR] <slide> ...
-  sb audit <deck> [--version v]
+  sb audit <deck> [--version v]             overflow, overlapping labels, the guides, and proposed slides that
+                                            won't show where their original shows
   sb export <deck> [--version v] [--with-edits]  next numbered PDF (the deck file; --with-edits: as the browser shows it)
   sb thumb <deck>                           refresh the dashboard thumbnail
   sb commit <deck> <message>                save the deck folder to version history
@@ -494,10 +503,94 @@ def proposal_state(slug):
     return info, rows
 
 
+# ---------- where proposals are filed: next to their original, or the reviewer never sees them ----------
+
+def deck_text(slug):
+    d, path = folder(slug)
+    return (path / d['entry']).read_text(encoding='utf-8')
+
+
+def misplaced(slug, info=None, src=None):
+    """The proposals that won't show where their original shows (tools/proposals.py placement()), and how many
+    proposals the deck has. A deck without any skips the browser."""
+    sys.path.insert(0, str(TOOLS))
+    import proposals as P
+    src = deck_text(slug) if src is None else src
+    if info is None:
+        if not re.search(r'\bprop\s*:', src):
+            return [], 0
+        info = json.loads(node('proposals', slug))
+    return P.placement(info, src), len(info['pairs'])
+
+
+def placement_lines(slug, bad):
+    if not bad:
+        return []
+    one = len(bad) == 1
+    out = [f"{len(bad)} proposed slide{'' if one else 's'} won't show where {'its original does' if one else 'their originals do'}:"]
+    out += ['  ' + b['why'] for b in bad]
+    if any(b['fixable'] for b in bad):
+        out.append(f"Fix: ./sb proposals {slug} --fix-placement  (files {'it' if one else 'each'} right after its original, with the original's cat and flags)")
+    return out
+
+
+def fix_placement_cmd(slug):
+    """sb proposals <deck> --fix-placement: file each misplaced proposal next to its original, check the deck, and put
+    the file back if anything else moved."""
+    sys.path.insert(0, str(TOOLS))
+    import proposals as P
+    d, path = folder(slug)
+    deck_file = path / d['entry']
+    src = deck_file.read_text(encoding='utf-8')
+    info = json.loads(node('proposals', slug))
+    bad = P.placement(info, src)
+    if not bad:
+        print(f"Every proposed slide is filed right after its original ({len(info['pairs'])} in all)." if info['pairs'] else 'No proposed slides in this deck.')
+        return
+    out, notes, problems = P.fix_placement(src, info)
+    if out != src:
+        deck_file.write_text(out, encoding='utf-8')
+        after = json.loads(node('proposals', slug))
+        props_ids = {x['p'] for x in info['pairs']}
+        still = {b['p']: b for b in P.placement(after, out)}
+        wrong = ['the deck has errors now: ' + '; '.join(after['errors'][:3])] if after.get('errors') else []
+        for v, blocks in info['blocks'].items():   # every other slide stays where it was, in every version
+            rest = lambda bs: [x for x in bs if x not in props_ids]
+            if rest(blocks) != rest(after['blocks'].get(v, [])):
+                wrong.append(f"version '{v}' changed beyond its proposals")
+        for p in notes:
+            if not after['flags'].get(p, {}).get('prop'):
+                wrong.append(f'{p} is no longer a proposal')
+            elif p in still and still[p]['fixable']:
+                wrong.append(f"{p} still isn't next to its original: {still[p]['why']}")
+        for p in set(still) - {b['p'] for b in bad}:
+            wrong.append(f"{p} was filed right and isn't now: {still[p]['why']}")
+        if wrong:
+            deck_file.write_text(src, encoding='utf-8')
+            sys.exit("Put the deck file back as it was: the fix didn't check out.\n  " + '\n  '.join(wrong) + '\nFile the proposal by hand (see the decks skill).')
+    for b in bad:
+        p = b['p']
+        if notes.get(p):
+            print(f"FILED         {p}  right after {b['o']}: {'; '.join(notes[p])}")
+        elif p in notes:
+            print(f"FILED         {p}  right after {b['o']}: nothing between them now")
+        elif p in problems:
+            print(f"NOT FIXED     {p}: {problems[p]}." + ('' if 'LIBRARY:' in problems[p] else ' File it by hand.'))
+        else:
+            print(f"NOT FIXED     {b['why']}")
+    if out != src:
+        print(f"\nChecked: every proposal fixed here shows where its original shows, and no other slide moved. Commit it: ./sb commit {slug} \"Proposed slides filed next to their originals\"")
+    if problems or any(not b['fixable'] for b in bad):
+        sys.exit(1)
+
+
 def proposals_cmd(slug, bake=False):
     sys.path.insert(0, str(TOOLS))
     import proposals as P
     info, rows = proposal_state(slug)
+    bad = P.placement(info, deck_text(slug))
+    if not bake:
+        print('\n'.join(placement_lines(slug, bad) + ['']) if bad else '', end='')
     if bake and info['loose']:   # done by hand: record the ones the file shows, so the next round lists them
         ids = [i for k, v in info['loose'].items() for i in (k, v.get('replaces', ''))]
         f = json.loads(node('proposals', slug, *[i for i in ids if i]))['flags']
@@ -531,6 +624,8 @@ def proposals_cmd(slug, bake=False):
             print(f"NOT BAKED     {o}: {r['how']}.")
         if not info['loose'] and not torn:
             print('No decisions to bake.')
+        if bad:
+            print('\n' + '\n'.join(placement_lines(slug, bad)))
         if torn:
             sys.exit(1)
         return
@@ -545,7 +640,24 @@ def proposals_cmd(slug, bake=False):
     deck_file = path / d['entry']
     src = deck_file.read_text(encoding='utf-8')
     want = {r['p']: {'decision': r['decision'], 'replaces': r['o']} for r in decided}
-    out, notes, problems = P.bake(src, want)
+    # an accepted proposal filed apart from its original (another cat, an extra): file it next to the original first,
+    # so it takes the original's place where the original showed
+    filed, fnotes, pre = src, {}, {}
+    acc = {p for p, w in want.items() if w['decision'] == 'accept'}
+    for b in bad:
+        if b['p'] in acc and not b['fixable']:
+            del want[b['p']]
+            pre[b['p']] = b['why'] + ' Fix that first'
+    if acc & {b['p'] for b in bad if b['fixable']}:
+        filed, fnotes, fprobs = P.fix_placement(src, info, only=acc & {b['p'] for b in bad if b['fixable']})
+        for p, why in fprobs.items():
+            del want[p]
+            pre[p] = f"it isn't filed next to its original, and moving it there didn't work ({why})"
+    out, notes, problems = P.bake(filed, want)
+    problems.update(pre)
+    for p, n in fnotes.items():
+        if n and p in notes:
+            notes[p].insert(0, f"filed right after {want[p]['replaces']} first: {'; '.join(n)}")
     done = [r for r in decided if r['p'] in notes]
     if done:
         deck_file.write_text(out, encoding='utf-8')
@@ -597,6 +709,9 @@ def proposals_cmd(slug, bake=False):
         open_on = {c['slide'] for c in call('GET', f'/api/decks/{slug}/comments')['comments']}
         if open_on & set(kept):
             print('Comments on proposals that are gone now (reply to them): ' + ', '.join(sorted(open_on & set(kept))))
+    left = [b for b in (P.placement(after, out) if done else bad) if b['p'] not in problems]   # still waiting for a decision, and still misfiled
+    if left:
+        print('\n' + '\n'.join(placement_lines(slug, left)))
     if problems or torn:
         sys.exit(1)
 
@@ -696,7 +811,10 @@ def main(argv):
         except OSError:
             has_props = None
         if has_props:
-            _, prs = proposal_state(slug)
+            pinfo, prs = proposal_state(slug)
+            bad, _ = misplaced(slug, pinfo)
+            if bad:
+                print('\n'.join(placement_lines(slug, bad)) + '\n')
             # counted by slide: several options for one slide are one decision
             n_dec = len({r['o'] for r in prs if r.get('decision')} - {r['o'] for r in prs if not r.get('decision')})
             n_open = len({r['o'] for r in prs if not r.get('decision')})
@@ -724,7 +842,10 @@ def main(argv):
         version = opt(rest, '--version')
         print(node('edits', slug, *(['--version', version] if version else [])), end='')
     elif cmd == 'proposals':
-        proposals_cmd(slug, bake='--bake' in rest)
+        if '--fix-placement' in rest:
+            fix_placement_cmd(slug)
+        else:
+            proposals_cmd(slug, bake='--bake' in rest)
     elif cmd == 'import':
         keep, dry = '--keep-mine' in rest, '--dry-run' in rest
         files = [a for a in rest if a not in ('--keep-mine', '--dry-run')]
@@ -749,6 +870,18 @@ def main(argv):
     elif cmd == 'idle':
         call('POST', f'/api/decks/{slug}/review', {'op': 'claude', 'idle': True})
     elif cmd == 'round':
+        force = '--force' in rest
+        rest = [a for a in rest if a != '--force']
+        try:   # a proposal the reviewer can't see where its original is would go unreviewed: don't record the round over it
+            bad, _ = misplaced(slug)
+        except SystemExit as e:
+            bad = []
+            print(f"Couldn't check where the proposed slides are filed: {e}", file=sys.stderr)
+        if bad and not force:
+            sys.exit('\n'.join(['Round not recorded.'] + placement_lines(slug, bad)
+                               + ['Then run this sb round again (or add --force to record it as it is).']))
+        if bad:
+            print('\n'.join(['Recording the round anyway (--force).'] + placement_lines(slug, bad)), file=sys.stderr)
         summary, export = opt(rest, '--summary', ''), opt(rest, '--export')
         changed = {}
         for c in opt(rest, '--changed', multi=True):
@@ -762,6 +895,11 @@ def main(argv):
     elif cmd == 'audit':
         version = opt(rest, '--version')
         print(node('audit', slug, *(['--version', version] if version else [])), end='')
+        bad, n = misplaced(slug)
+        if bad:
+            print('\n'.join(placement_lines(slug, bad)))
+        elif n:
+            print(f"Proposed slides: {'the one' if n == 1 else f'all {n}'} {'is' if n == 1 else 'are'} filed right after {'its original' if n == 1 else 'their originals'}.")
     elif cmd == 'export':
         version = opt(rest, '--version')
         d, path = folder(slug)

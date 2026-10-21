@@ -366,3 +366,251 @@ def bake(src, decisions, used_figs=True):
         return ed.apply(), notes, problems
     except ValueError as x:
         return src, {}, {p: f'edits overlap ({x}); bake these one at a time' for p in decisions}
+
+
+# ---------- where a proposal is filed ----------
+# A proposal shows where its original shows only when it is filed like it: the same cat, the same flags that keep a
+# slide out of the default versions (alt, fac, only), right after it in LIBRARY (its other options may sit between),
+# and, in a version that lists its slides by hand, right after it in that list. placement() says, in plain words,
+# which proposals aren't; fix_placement() files them next to their original, editing the deck file as text like bake().
+
+FLAGS = ('alt', 'fac', 'only')
+
+
+def hand_lists(src, mask):
+    """The versions whose blocks are written out as an array literal: {version: (array start, array end)}."""
+    pit, out = pitches_extent(src, mask), {}
+    for name, k, v, e in (props(src, mask, *pit) if pit else []):
+        if src[v] == '{':
+            for n2, k2, v2, e2 in props(src, mask, v, e):
+                if n2 == 'blocks' and src[v2] == '[':
+                    out[name] = (v2, e2)
+    return out
+
+
+def _quoted(vs):
+    return ' and '.join(f"'{v}'" for v in vs) if len(vs) < 3 else ', '.join(f"'{v}'" for v in vs[:-1]) + f", and '{vs[-1]}'"
+
+
+def placement(info, src=None):
+    """Every proposal that won't appear where its original appears: [{'p', 'o', 'why', 'fixable'}], in LIBRARY order.
+    info: what `node browser.mjs proposals <deck>` reports (the deck as it builds); src: the deck file, which tells
+    the versions listed by hand from the ones built from LIBRARY."""
+    mask = code_mask(src) if src else None
+    hand = hand_lists(src, mask) if src else {}
+    blocks, names, main = info['blocks'], info.get('catNames') or {}, info.get('main')
+    versions = sorted(blocks, key=lambda v: v != main)   # the main version first: it is the one named
+    opts = {}
+    for x in info['pairs']:
+        opts.setdefault(x['o'], []).append(x['p'])
+    where = lambda cat, flags: f"{names.get(cat) or cat} (cat '{cat}'{''.join(', ' + f for f in flags)})"
+    out = []
+    for x in info['pairs']:
+        p, o = x['p'], x['o']
+        if x.get('missing'):
+            out.append({'p': p, 'o': o, 'fixable': False, 'why': f"{p} won't show as a proposal: it replaces '{o}', which isn't a slide in LIBRARY."})
+            continue
+
+        def run(v):   # the original and the options right after it, in version v
+            B = blocks[v]; i = B.index(o) + 1
+            while i < len(B) and B[i] in opts[o]:
+                i += 1
+            return B[B.index(o) + 1:i]
+        n = lambda v, i: blocks[v].index(i) + 1
+        missing = [v for v in versions if o in blocks[v] and p not in blocks[v]]
+        alone = [v for v in versions if p in blocks[v] and o not in blocks[v]]
+        apart = [v for v in versions if o in blocks[v] and p in blocks[v] and p not in run(v)]
+        if 'pcat' not in x:   # an older browser job: nothing to check against
+            continue
+        filed = x['pcat'] != x['ocat'] or sorted(x['pflags']) != sorted(x['oflags'])
+        far = x.get('gap', 0) > 0 or x.get('before')
+        why, fixable = [], True
+        pw, ow = where(x['pcat'], x['pflags']), where(x['ocat'], x['oflags'])
+        if filed:
+            if missing:
+                v = missing[0]
+                why.append(f"{p} won't show: its original is slide {n(v, o)} of '{v}', but the proposal is filed in {pw}.")
+            elif alone:
+                why.append(f"{p} would show in '{alone[0]}' without its original: the original is filed in {ow}, the proposal in {pw}.")
+            elif apart:
+                v = apart[0]
+                why.append(f"{p} won't show next to its original: in '{v}' the original is slide {n(v, o)} and the proposal slide {n(v, p)}, "
+                           f"as the proposal is filed in {pw} and the original in {ow}.")
+            else:
+                why.append(f"{p} is filed in {pw}, but its original is in {ow}.")
+        elif far and [v for v in apart if v not in hand]:
+            v = [v for v in apart if v not in hand][0]
+            why.append(f"{p} won't show next to its original: in '{v}' the original is slide {n(v, o)} and the proposal slide {n(v, p)}, "
+                       f"because it sits {x['gap']} entr{'y' if x['gap'] == 1 else 'ies'} {'above' if x.get('before') else 'below'} its original in LIBRARY."
+                       if x['gap'] else f"because it sits above its original in LIBRARY.")
+        lists = [v for v in missing if v in hand]
+        if lists:
+            one = len(lists) == 1
+            why.append(f"{'It also' if why else p} won't show in {_quoted(lists)}: {'that version lists its' if one else 'those versions list their'} slides by hand "
+                       f"and {'has' if one else 'have'} the original{f' (slide {n(lists[0], o)})' if one else ''} but not the proposal.")
+        moved = [v for v in apart if v in hand]
+        if moved:
+            why.append(f"{'In' if why else p + ' is apart from its original in'} {_quoted(moved)}{', which list' if len(moved) > 1 else ', which lists'} "
+                       f"slides by hand, {'it' if why else 'the proposal'} isn't right after its original.")
+        other = [v for v in missing if v not in hand] if not filed else []
+        if other:
+            why.append(f"{'It also' if why else p} won't show in {_quoted(other)}, which {'has' if len(other) == 1 else 'have'} its original: fix that version by hand.")
+            fixable = False
+        lone = [v for v in alone if v in hand] if not filed else []
+        if lone:
+            why.append(f"{'It' if why else p} shows in {_quoted(lone)} without its original, which {'that version doesn’t' if len(lone) == 1 else 'those versions don’t'} list: fix by hand.")
+            fixable = False
+        if why:
+            out.append({'p': p, 'o': o, 'why': ' '.join(why), 'fixable': fixable})
+    return out
+
+
+def _drop_named(ed, src, mask, v, e, name):
+    """Remove the top-level property name from the object literal src[v:e]."""
+    ps = props(src, mask, v, e)
+    for i, (nm, ks, vs, ve) in enumerate(ps):
+        if nm != name:
+            continue
+        after = re.compile(r'\s*,[ \t]*').match(src, ve)
+        if after:
+            ed.replace(ks, after.end(), '')
+        else:
+            before = re.search(r',\s*$', src[v:ks])
+            ed.replace(v + before.start() if before else ks, ve, '')
+        return True
+    return False
+
+
+def _retag(src, mask, v, e, cat, flags, flag_text, quote="'"):
+    """src[v:e] (an object literal) with the given cat and exactly these flags (alt, fac, only), as new text."""
+    ed, ps = Edit(src), props(src, mask, v, e)
+    have = {nm: (ks, vs, ve) for nm, ks, vs, ve in ps}
+    adds = []
+    if 'cat' in have:
+        ks, vs, ve = have['cat']
+        if src[vs:ve].strip()[1:-1] != cat:
+            q = src[vs] if src[vs] in '\'"' else quote
+            ed.replace(vs, ve, q + cat + q)
+    elif cat is not None:
+        adds.append(f'cat: {quote}{cat}{quote}')
+    for f in FLAGS:
+        if f in have and f not in flags:
+            _drop_named(ed, src, mask, v, e, f)
+        elif f not in have and f in flags:
+            adds.append(f'{f}: {flag_text.get(f, "true")}')
+    if adds:
+        if 'cat' in have:   # right after the cat, the way the decks write them
+            comma = re.compile(r'\s*,[ \t]*').match(src, have['cat'][2])
+            if comma:
+                ed.replace(comma.end(), comma.end(), ', '.join(adds) + ', ')
+            else:
+                ed.replace(have['cat'][2], have['cat'][2], ', ' + ', '.join(adds))
+        else:
+            first = ps[0][1] if ps else v + 1
+            ed.replace(first, first, ', '.join(adds) + (', ' if ps else ' '))
+    whole = ed.apply()
+    return whole[v:e + len(whole) - len(src)]
+
+
+def _entries(src, mask):
+    """Every LIBRARY entry written in the file, in file order: [(id, key start, value start, value end)]."""
+    return [t for a, b in library_extents(src, mask) for t in props(src, mask, a, b)]
+
+
+def _after_entry(src, e):
+    """Where a new entry goes after the one that ends at e: on the next line, on the same line after its comma,
+    or after it when it is the last one and has no comma."""
+    m = re.compile(r'[ \t]*,[ \t]*(//[^\n]*)?\n').match(src, e)
+    if m:
+        return m.end(), 'line'
+    m = re.compile(r'[ \t]*,').match(src, e)
+    return (m.end(), 'same') if m else (e, 'last')
+
+
+def fix_placement(src, info, only=None):
+    """File each misplaced proposal (or those in only) next to its original: in LIBRARY right after the original and
+    its other options, with the original's cat and flags; and in every version listed by hand that has the original,
+    right after it. Returns (new text, notes per proposal, problems per proposal)."""
+    pairs = {x['p']: x for x in info['pairs']}
+    opts = {}
+    for x in info['pairs']:
+        opts.setdefault(x['o'], []).append(x['p'])
+    notes, problems = {}, {}
+    for item in placement(info, src):
+        p, o = item['p'], item['o']
+        if only is not None and p not in only:
+            continue
+        x, msgs = pairs[p], []
+        if x.get('missing'):
+            problems[p] = f"it replaces '{o}', which isn't a slide in LIBRARY: point replaces at the slide it is for"
+            continue
+        mask = code_mask(src)
+        try:
+            ents = _entries(src, mask)
+            ids = [t[0] for t in ents]
+            if ids.count(p) != 1 or ids.count(o) != 1:
+                raise ValueError(f"couldn't find one LIBRARY entry each written as '{p}': {{ … }} and '{o}': {{ … }}")
+            ed = Edit(src)
+            _, pk, pv, pe = ents[ids.index(p)]
+            _, ok_, ov, oe = ents[ids.index(o)]
+            if src[pv] != '{':
+                raise ValueError(f"'{p}' is made by a helper, not written out as {{ … }}")
+            io, ip = ids.index(o), ids.index(p)
+            in_run = ip > io and all(t in opts[o] for t in ids[io + 1:ip])   # only its other options between them
+            i = io + 1   # past the original's run: the other options right after it in the file
+            while i < len(ids) and ids[i] in opts[o] and ids[i] != p:
+                i += 1
+            flag_text = {}
+            if src[ov] == '{':
+                for nm, ks, vs, ve in props(src, mask, ov, oe):
+                    if nm in FLAGS:
+                        flag_text[nm] = src[vs:ve]
+            want_flags = list(x['oflags'])
+            body = _retag(src, mask, pv, pe, x['ocat'], want_flags, flag_text)
+            if x['pcat'] != x['ocat']:
+                msgs.append(f"cat '{x['pcat']}' → '{x['ocat']}'")
+            gone, came = [f for f in x['pflags'] if f not in want_flags], [f for f in want_flags if f not in x['pflags']]
+            if gone:
+                msgs.append('no ' + ', '.join(gone))
+            if came:
+                msgs.append(', '.join(came) + ' like its original')
+            if in_run:
+                if body != src[pv:pe]:
+                    ed.replace(pv, pe, body)
+            else:
+                last = ents[i - 1]   # the original, or its last option
+                line_start = src.rfind('\n', 0, last[1]) + 1
+                indent = src[line_start:last[1]] if not src[line_start:last[1]].strip() else '  '
+                comma = re.compile(r'[ \t]*,').match(src, pe)
+                rest = re.compile(r'[ \t]*(//[^\n]*)?\n').match(src, comma.end() if comma else pe)
+                tail = (' ' + rest.group(1)) if rest and rest.group(1) else ''
+                at, how = _after_entry(src, last[3])
+                text = src[pk:pv] + body
+                ed.replace(at, at, {'line': f'{indent}{text},{tail}\n', 'same': f' {text},', 'last': f',\n{indent}{text}'}[how])
+                delete_entry(ed, src, pk, pe)
+                msgs.insert(0, f"moved right after '{ents[i - 1][0]}' in LIBRARY")
+            for v, (a, b) in hand_lists(src, mask).items():
+                ot = string_tokens(src, mask, a, b, o)
+                if len(ot) != 1:
+                    continue
+                s1, e1 = ot[0][0], ot[0][1]
+                pt = string_tokens(src, mask, a, b, p)
+                j, end = e1, e1   # past the original's options listed right after it
+                while True:
+                    m = re.compile(r'\s*,\s*([\'"])([\w$-]+)\1').match(src, j)
+                    if not m or m.group(2) not in opts.get(o, []) or m.group(2) == p:
+                        break
+                    j = end = m.end()
+                nxt = re.compile(r'\s*,\s*([\'"])([\w$-]+)\1').match(src, end)
+                if pt and nxt and nxt.group(2) == p:
+                    continue   # already right after it
+                for s2, e2, _, _ in pt:
+                    drop_element(ed, src, s2, e2)
+                ed.replace(end, end, f', {src[s1]}{p}{src[s1]}')
+                msgs.append(f"{'moved next to' if pt else 'added after'} '{o}' in '{v}'")
+            src = ed.apply()
+        except (ValueError, AttributeError) as e:
+            problems[p] = str(e)
+            continue
+        notes[p] = msgs
+    return src, notes, problems

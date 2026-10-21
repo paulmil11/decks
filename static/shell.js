@@ -122,6 +122,8 @@
     if (d === 'accept') pick = pick || p;
     const before = visible(), lead = before.find((x) => origOf(x) === o), k = before.indexOf(lead);
     if (applied) {   // the version on screen changes now; another version follows when Claude bakes it in
+      // one this version doesn't carry by default (filed apart, shown by placeProps) stays in it once saved, as a slide you added
+      if (d === 'accept' && def && !def.has(pick)) { try { if (typeof ADDED !== 'undefined' && ADDED instanceof Set) ADDED.add(pick); } catch (e) {} }   // eslint-disable-line no-undef
       if (d === 'accept') { setInVersion(pick, true); setInVersion(o, false); ps.forEach((x) => { if (x !== pick) setInVersion(x, false); }); }
       else if (d === 'keep') { setInVersion(o, true); ps.forEach((x) => setInVersion(x, false)); }
       else { setInVersion(o, true); ps.forEach((x) => { if (!def || def.has(x) || had.has(x)) setInVersion(x, true); }); }
@@ -178,6 +180,60 @@
     document.querySelectorAll('#deck > [data-id] .sb-flip [data-flip]').forEach((b) => b.classList.toggle('on', b.dataset.flip === flipShows(b.closest('#deck > [data-id]').dataset.id)));
     if (cur && wrapOf(cur)) { const w2 = wrapOf(cur); propBar(w2, cur, w2.querySelector(':scope > .slide-no')); }
   }
+  // A proposal filed apart from its original (another cat, an extra, left out of a version listed by hand, far from it in
+  // LIBRARY) still shows right after its original in the version on screen, so you can decide it; an accepted one shows
+  // in the original's place. Display only: nothing is saved for it until you decide, and the deck file is fixed by
+  // sb proposals --fix-placement (or --bake, which files an accepted one first). Not in read-only views, which report
+  // the deck as saved.
+  let reviewIn = false;
+  const forgiven = new Set();   // proposals this tab put in the version on screen
+  const defList = () => { try { return PITCHES[sideSelect ? sideSelect.value : current].blocks; } catch (e) { return null; } };   // eslint-disable-line no-undef
+  function placeProps() {
+    const blocks = defList();
+    if (!reviewIn || SB.readonly || !blocks || presenting()) return;
+    const def = new Set(blocks), rec = (x) => { const r = (review.proposals || {})[x]; return r && !r.baked ? r : null; };
+    const filedRight = (o, x) => { const i = blocks.indexOf(o); if (i < 0 || !def.has(x)) return false;   // right after its original by default
+      for (let j = i + 1; j < blocks.length; j++) { if (blocks[j] === x) return true; if (origOf(blocks[j]) !== o) return false; } return false; };
+    const added = []; let moved = 0;
+    const put = (x, after, before) => {   // the slide on screen, or a new one built for it; nothing is saved
+      let w = wrapOf(x);
+      if (w && (after ? after.nextElementSibling === w : before.previousElementSibling === w)) return;
+      if (!w) { try { w = build(x); } catch (e) { w = null; } if (!w) return; added.push(w); const inp = document.querySelector(`#block-list input[data-id="${CSS.escape(x)}"]`); if (inp) inp.checked = true; }   // eslint-disable-line no-undef
+      if (after) after.after(w); else before.before(w);
+      forgiven.add(x); moved++;
+    };
+    [...new Set(Object.keys(lib()).map(origOf).filter(Boolean))].forEach((o) => {
+      const ps = optionsOf(o).filter((x) => !filedRight(o, x)); if (!ps.length) return;
+      const acc = optionsOf(o).find((x) => (rec(x) || {}).decision === 'accept');
+      if (acc) {   // accepted, not baked yet: in the original's place, in the version it was accepted in
+        const r = rec(acc);
+        if (!ps.includes(acc) || wrapOf(acc) || wrapOf(o) || !def.has(o) || (r.version && sideSelect && r.version !== sideSelect.value)) return;
+        const i = blocks.indexOf(o), next = blocks.slice(i + 1).map(wrapOf).find((w) => w && origOf(w.dataset.id) !== o);
+        const prev = blocks.slice(0, i).reverse().map(wrapOf).find(Boolean);
+        if (next || prev) put(acc, next ? null : prev, next);
+        return;
+      }
+      if (!wrapOf(o)) return;   // the original isn't in this version (or you took it out): nothing to sit next to
+      ps.forEach((x) => {
+        if (rec(x) || (!wrapOf(x) && def.has(x))) return;   // decided, or taken out of this version by hand: a decision too
+        let last = wrapOf(o);
+        while (last.nextElementSibling && last.nextElementSibling.dataset && origOf(last.nextElementSibling.dataset.id) === o && last.nextElementSibling.dataset.id !== x) last = last.nextElementSibling;
+        put(x, last);
+      });
+    });
+    if (!moved) return;
+    try { added.forEach((w) => { if (typeof autofitText === 'function') autofitText(w); if (typeof drawTrees === 'function') drawTrees(w); }); } catch (e) {}   // eslint-disable-line no-undef
+    try { if (typeof numberSlides === 'function') numberSlides(); } catch (e) {}   // eslint-disable-line no-undef
+    if (added.length) refit();
+  }
+  // × on a proposal this tab put in the version is Keep original: it was never saved in the version, so taking it out
+  // by hand would leave no trace and it would come back on the next load
+  deck.addEventListener('click', (e) => {
+    const b = e.isTrusted && e.target.closest('.cbtn[data-a="rm"]'), w = b && b.closest('#deck > [data-id]'), id = w && w.dataset.id;
+    if (!id || !forgiven.has(id) || !origOf(id) || (decisionOf(id) || {}).d) return;
+    const blocks = defList(); if (blocks && blocks.includes(id)) return;
+    e.stopPropagation(); e.preventDefault(); decide(id, 'keep');
+  }, true);
 
   // ---------- top bar ----------
   // Left: the deck and its version, as one control, then the filters. Right: the views, New slide (addslide.js),
@@ -1088,8 +1144,8 @@
     el.classList.toggle('on', !!fresh);
     if (fresh) el.querySelector('span').textContent = 'Claude' + (c.total ? `: ${c.done || 0} of ${c.total}` : '') + (c.text ? ' · ' + c.text : '');
   }
-  function refresh() { counts(); decorate(); markTitles(); claudeLine(); renderFilm(); if (ui.view === 'scroll') renderPanel(); if (ui.view === 'focus') { renderPanel(); size(); } if (ui.view === 'sorter') renderSorter(); if (ui.view === 'checks') renderChecks();  requestAnimationFrame(masks); }
-  function setReview(r) { if (r && r.replies) review = r; refresh(); }
+  function refresh() { placeProps(); counts(); decorate(); markTitles(); claudeLine(); renderFilm(); if (ui.view === 'scroll') renderPanel(); if (ui.view === 'focus') { renderPanel(); size(); } if (ui.view === 'sorter') renderSorter(); if (ui.view === 'checks') renderChecks();  requestAnimationFrame(masks); }
+  function setReview(r) { if (r && r.replies) { review = r; reviewIn = true; } refresh(); }
   async function loadReview() { try { setReview(await (await fetch(api('review'))).json()); } catch (e) {} }
 
   // comments typed under a slide; edits on a slide refresh its thumbnail

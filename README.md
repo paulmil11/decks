@@ -251,6 +251,15 @@ and the original moves to the extras; a rejected one, or an option that lost, is
 keeps it). Two options accepted for one slide are left for you to settle. It checks the deck
 afterward and puts the file back if anything is off.
 
+A proposal filed apart from its original (in another part, among the extras, far from it in the
+deck file, or left out of a version that lists the original by hand) still shows right after
+its original in the version on screen, so you can decide it; nothing is saved for it until you
+do. `sb audit`, `sb comments`, and `sb proposals` name it in plain words ("trade-offs-2 won't
+show: its original is slide 15 of 'five', but the proposal is filed in Extras (cat 'extra',
+alt)"), `sb proposals <deck> --fix-placement` files it right after its original, the bake files
+an accepted one there first, and `sb round` won't record a round while one is misfiled
+(`--force` records it anyway).
+
 ## Working in a deck
 
 Four views, each with the slides on the left and the notes on the right:
@@ -420,14 +429,14 @@ Run it from this folder (or by its full path). It talks to the running server.
 | `sb decks` | Every deck, with open comments and questions |
 | `sb comments <deck> [--all]` | Comments to act on, numbered like the deck (`--all` adds drafts) |
 | `sb edits <deck> [--version v]` | Text the reviewer edited on the slides, and slide moves |
-| `sb proposals <deck> [--bake]` | Proposed slides and the decision on each; `--bake` writes the decided ones into the deck file and checks it |
+| `sb proposals <deck> [--bake \| --fix-placement]` | Proposed slides and the decision on each, after any that won't show where their original shows; `--fix-placement` files those right after their original, `--bake` writes the decided ones into the deck file and checks it |
 | `sb working <deck> <slide>` | Show "Claude working" on a slide |
 | `sb reply <deck> <slide> done\|question\|skipped "<text>"` | Reply on a slide |
 | `sb status <deck> "<text>" [--done N --total M]` | The live line in the top bar; `sb idle <deck>` clears it |
 | `sb shot <deck> [--version v] [--out DIR] <slide> ...` | Screenshots of slides |
-| `sb audit <deck> [--version v]` | Overflow, overlapping labels, and the Guides |
+| `sb audit <deck> [--version v]` | Overflow, overlapping labels, the Guides, and proposed slides that won't show where their original shows |
 | `sb export <deck> [--version v] [--with-edits]` | The next numbered PDF; older ones move to `_archive/` |
-| `sb round <deck> --summary S [--changed slide="what changed" ...] [--export vN]` | Record a round |
+| `sb round <deck> --summary S [--changed slide="what changed" ...] [--export vN] [--force]` | Record a round (refused while a proposal won't show where its original shows; `--force` records it anyway) |
 | `sb commit <deck> "<message>"` | Commit the deck folder |
 | `sb import <deck> <file.html> [--dry-run] [--keep-mine]` | Bring a reviewer's returned file (a Review copy) into the deck |
 | `sb watch [<deck>]` | Wait until you click Process now in any deck (or the one named), then exit saying which (watch mode) |
@@ -468,7 +477,7 @@ systemctl --user enable --now decks
 | `templates/` | `_engine/engine.html` (the deck engine), `_engine/basics.js`, and one folder per template |
 | `static/` | The browser shell: `boot.js`, `shell.js`, `shell.css`, `guides.js`, `addslide.js`, `pictures.js`, `clientcopy.js`, and `dashboard.html` |
 | `tools/browser.mjs` | Headless Chrome jobs behind `sb`: titles, edits, proposals, shots, audit, PDF, and thumbnails |
-| `tools/proposals.py` | `sb proposals --bake`: writes accept / keep decisions into a deck file's JavaScript, touching code only, never a slide's words |
+| `tools/proposals.py` | `sb proposals`: which proposals won't show where their original shows; `--fix-placement` files them next to it, and `--bake` writes accept / keep decisions into the deck file's JavaScript, touching code only, never a slide's words |
 | `tools/pptx2native.py` | Converts PowerPoint slides into editable native slides (how the consulting starter was made) |
 
 The server accepts changes only from its own pages (and from `sb` and the headless tools),

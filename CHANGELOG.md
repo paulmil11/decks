@@ -4,6 +4,15 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
+## Unreleased
+
+- A proposed slide filed apart from its original (in another part, among the extras, or left out
+  of a version that lists the original by hand) no longer stays out of sight: it shows right
+  after its original, so you can decide it. `sb audit`, `sb comments`, and `sb proposals` say
+  which proposal won't show and why, `sb proposals <deck> --fix-placement` files it next to its
+  original, the bake files an accepted one there first, and `sb round` won't record a round while
+  one is misfiled (`--force` records it anyway).
+
 ## 0.10.1 (October 21, 2026)
 
 - `sb shot`, `sb audit`, `sb export`, Download PDF, and dashboard thumbnails wait until the deck

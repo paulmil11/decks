@@ -138,8 +138,17 @@ export async function run(argv, { base: BASE, browser }) {
         Object.keys(PITCHES).forEach((k) => { out.versions[k] = String(PITCHES[k].name || k); out.blocks[k] = PITCHES[k].blocks.slice(); });   // eslint-disable-line no-undef
         // versions that carry the extras too ("Everything"): an accepted proposal's original stays in them
         out.extras = Object.fromEntries(Object.entries(out.blocks).map(([k, b]) => [k, b.some((id) => L[id] && L[id].alt && !L[id].lib && !L[id].prop)]));
+        // where each proposal is filed next to its original (tools/proposals.py placement() reads these): its cat, the flags
+        // that keep a slide out of the default versions, and how many LIBRARY entries sit between the two (its other options don't count)
+        const ORDER = Object.keys(L), FLAGS = ['alt', 'fac', 'only'], flagsOf = (b) => FLAGS.filter((f) => b && b[f]);
+        const gap = (p, o) => { const a = ORDER.indexOf(p), b = ORDER.indexOf(o); return b < 0 ? 0 : ORDER.slice(Math.min(a, b) + 1, Math.max(a, b)).filter((x) => !(L[x].prop && L[x].replaces === o)).length; };
         out.pairs = Object.keys(L).filter((id) => L[id].prop && L[id].replaces).map((id) => ({ p: id, o: L[id].replaces, title: t(id), otitle: L[L[id].replaces] ? t(L[id].replaces) : '',
-          missing: !L[L[id].replaces], palt: !!L[id].alt, oalt: !!(L[L[id].replaces] || {}).alt, notes: plain(L[id].notes).slice(0, 300) }));
+          missing: !L[L[id].replaces], palt: !!L[id].alt, oalt: !!(L[L[id].replaces] || {}).alt, notes: plain(L[id].notes).slice(0, 300),
+          pcat: L[id].cat == null ? null : String(L[id].cat), ocat: (L[L[id].replaces] || {}).cat == null ? null : String(L[L[id].replaces].cat),
+          pflags: flagsOf(L[id]), oflags: flagsOf(L[L[id].replaces]), gap: gap(id, L[id].replaces), before: ORDER.indexOf(id) < ORDER.indexOf(L[id].replaces) }));
+        const names = (n) => { try { return Object.fromEntries(Object.entries(n).map(([k, v]) => [k, plain(v)])); } catch (e) { return {}; } };
+        out.catNames = Object.assign({}, (() => { try { return names(CAT_LABELS); } catch (e) { return {}; } })(), (() => { try { return names(CAT_SHORT); } catch (e) { return {}; } })());   // eslint-disable-line no-undef
+        out.main = Object.keys(PITCHES).find((k) => PITCHES[k].default) || out.version;   // eslint-disable-line no-undef
         const flag = (id) => ({ exists: !!L[id], prop: !!(L[id] || {}).prop, alt: !!(L[id] || {}).alt, replaces: (L[id] || {}).replaces || null });
         [...out.pairs.flatMap((x) => [x.p, x.o]), ...extra].forEach((id) => { out.flags[id] = flag(id); });
         const sel = document.querySelector('.sidebar select'), first = String(current);   // eslint-disable-line no-undef

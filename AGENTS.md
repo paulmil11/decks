@@ -23,7 +23,7 @@ Quick reference:
 - Start the server if it isn't running: `python3 server.py` (port 8790 unless
   `config.json` or `SB_PORT` says otherwise).
 - `./sb decks`, `./sb comments <deck>`, `./sb edits <deck>`: what to act on.
-- `./sb proposals <deck> [--bake]`: decisions on proposed slides (`prop:true, replaces:'id'`); `--bake` writes them into the deck file.
+- `./sb proposals <deck> [--bake | --fix-placement]`: decisions on proposed slides (`prop:true, replaces:'id'`), after a line for any proposal that won't show where its original shows; `--fix-placement` files those right after their original, `--bake` writes the decisions into the deck file. `sb audit` names misfiled proposals too, and `sb round` refuses while one exists (`--force` records it anyway).
 - `./sb reply <deck> <slide> done|question|skipped "<text>"`: answer on the slide.
 - `./sb shot`, `./sb audit`, `./sb export`, `./sb round`, `./sb commit`: check and finish.
 
