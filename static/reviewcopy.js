@@ -171,7 +171,12 @@ if(document.readyState==='complete')setTimeout(go,400);else window.addEventListe
   // a reviewer gets the deck's logo and name, a short instruction, and the two buttons they need: none of the editor's controls
   const REVIEW_CSS = '<style id="review-copy-css">#copy-edits, #presenter-btn, .opt-row:has(#notes-toggle), .fnote, .brand-sub, .sidebar .field-label, #pitch-select, #block-list, #reload-btn { display: none !important; }'
     + ' .rc-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; } .rc-brand img { max-height: 30px; max-width: 70%; display: block; } .rc-brand span { font-size: 1.05rem; line-height: 1.3; }'
-    + ' .sidebar .toolbar { margin-top: 1.2rem; }</style>';
+    + ' .sidebar .toolbar { margin-top: 1.2rem; }'
+    // the parts around the slides keep the editor's colors, whatever text color a deck's theme sets for the page (a dark deck's light text)
+    + ' html body .stage-head h1 { color: #272322; } html body .stage-head p, html body .slide-no code, html body .slide-no .of { color: #635B58; }'
+    + ' html body .view-toggle button { color: #635B58; } html body .view-toggle button.on { color: #fff; }'
+    + ' html body .ctrls .cbtn { color: #635B58; background: rgba(255,255,255,.94); border-color: rgba(0,0,0,.14); }'
+    + ' html body .btn-outline { color: #272322; border-color: #D9D4D0; } html body .fb { color: #272322; } html body .fb::placeholder { color: #948C88; }</style>';
   // the logo the slides carry (StrategyU's, or the deck's own), and the deck's name without the brand in front
   const brandOf = () => { const lg = deck.querySelector('.slide img.logo, .slide .logo img, .slide .logo'), src = lg && (lg.getAttribute('src') || (lg.querySelector('img') || {}).getAttribute?.('src'));
     const b = document.querySelector('.sidebar .brand'), t = b ? b.textContent.replace(/\s+/g, ' ').trim() : '', name = (t.split(' · ').pop() || SB.name || '').trim();
