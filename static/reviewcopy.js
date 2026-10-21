@@ -80,9 +80,10 @@
     }
     return -1;
   }
-  function scan(src, i, stop) {   // the index of `stop` at depth 0 from i, or -1
+  function scan(src, i, stop, until = -1) {   // the index of `stop` at depth 0 from i, or -1; with until, until itself if the scan gets there at depth 0
     let depth = 0, prev = '(';
     while (i < src.length) {
+      if (until >= 0 && i >= until) return i === until && !depth ? i : -1;   // past it: it was inside a string or a comment
       const c = src[i], d = src[i + 1];
       if (c === '/' && d === '/') { const j = src.indexOf('\n', i); if (j < 0) return -1; i = j; continue; }
       if (c === '/' && d === '*') { const j = src.indexOf('*/', i + 2); if (j < 0) return -1; i = j + 2; continue; }
@@ -98,8 +99,16 @@
     }
     return -1;
   }
-  function region(src, name) {   // [start, end) of the one `const NAME = …;` at the start of a line, or null
-    const hits = [...src.matchAll(new RegExp('(^|\\n)(?:const|let|var)\\s+' + name + '\\s*=', 'g'))];
+  function outside(src, at) {   // whether `at` sits in a <script> outside every bracket, string, and comment
+    const open = src.lastIndexOf('<script', at), body = open < 0 ? -1 : src.indexOf('>', open) + 1;
+    if (body <= 0 || body > at || src.lastIndexOf('</script', at) > open) return false;
+    return scan(src, body, null, at) === at;
+  }
+  function region(src, name) {   // [start, end) of the one top-level `const NAME = …;` at the start of a line, or null
+    let hits = [...src.matchAll(new RegExp('(^|\\n)(?:const|let|var)\\s+' + name + '\\s*=', 'g'))];
+    // a deck made with extra pieces (a CEO deck, say) also sets PITCHES inside TEMPLATE_PITCHES, the
+    // template's own versions: of several, the one that counts is the one at the top of its script
+    if (hits.length > 1) hits = hits.filter((h) => outside(src, h.index + h[1].length));
     if (hits.length !== 1) return null;
     const start = hits[0].index + hits[0][1].length, from = hits[0].index + hits[0][0].length, end = scan(src, from, ';');
     if (end < 0) return null;
@@ -227,7 +236,7 @@ if(document.readyState==='complete')setTimeout(go,400);else window.addEventListe
     Object.assign(pv, { default: true, blocks: kept });
     const parts = new Set(libIds.map((id) => L[id].cat)), only = (o) => { const r = {}; Object.keys(o).forEach((k) => { if (parts.has(k)) r[k] = o[k]; }); return r; };
     const C = get(() => CATS), CL = get(() => CAT_LABELS), CS = get(() => CAT_SHORT);   // eslint-disable-line no-undef
-    const swaps = { LIBRARY: libLit, PITCHES: lit({ [v]: pv }), FIGS: figLit, DONE_FB: '[]', PREV_DEFAULTS: '{}',
+    const swaps = { LIBRARY: libLit, PITCHES: lit({ [v]: pv }), TEMPLATE_PITCHES: '{}', FIGS: figLit, DONE_FB: '[]', PREV_DEFAULTS: '{}',
       CATS: Array.isArray(C) ? lit(C.filter((c) => parts.has(c))) : null, CAT_LABELS: CL && typeof CL === 'object' ? lit(only(CL)) : null, CAT_SHORT: CS && typeof CS === 'object' ? lit(only(CS)) : null };
 
     let html = setSaved(html0, 'null').replace(/<script id="review-copy" type="application\/json">[\s\S]*?<\/script>\n?/g, ''), engine = html;
@@ -246,7 +255,14 @@ if(document.readyState==='complete')setTimeout(go,400);else window.addEventListe
       const from = s.indexOf('(() => {', i), end = from < 0 ? -1 : scan(s, from, ';');
       if (end < 0) throw new Stop('Couldn’t find the end of the deck’s basic layouts block, so a review copy can’t leave it out.');
       return s.slice(0, i) + s.slice(end + 1); };
-    html = basics(html); engine = basics(engine);
+    // slides set one at a time after LIBRARY (a piece's placeholder slide, until Claude builds that
+    // version): any of them on screen is in the LIBRARY written above too, so their lines go
+    const added = (s) => { [...s.matchAll(/(^|\n)LIBRARY\[(?:"[^"\\\n]*"|'[^'\\\n]*')\]\s*=/g)].reverse().forEach((h) => {
+      const start = h.index + h[1].length; if (!outside(s, start)) return;
+      const end = scan(s, h.index + h[0].length, ';');
+      if (end < 0) throw new Stop('Couldn’t find the end of a slide the deck’s source adds on its own line, so a review copy can’t leave it out.');
+      s = s.slice(0, start) + s.slice(end + 1); }); return s; };
+    html = added(basics(html)); engine = added(basics(engine));
     // a plain string constant nothing uses any more (the notes placeholder in new decks, say) goes blank
     html = html.replace(/^const ([A-Za-z_][\w]*) = ('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*");[ \t]*$/gm, (m, name) =>
       ((html.match(new RegExp('\\b' + name + '\\b', 'g')) || []).length > 1 ? m : `const ${name} = '';`));
@@ -309,7 +325,9 @@ if(document.readyState==='complete')setTimeout(go,400);else window.addEventListe
     }
     deck.querySelectorAll('textarea.fb').forEach((t) => { const w = t.closest('[data-id]'); if (t.value.trim()) items.push(['comments', w ? w.dataset.id : '', t.value]); });   // typed, not saved yet
     (get(() => DONE_FB) || []).forEach((t) => items.push(['comments', '', String(t).replace(/^[\w-]+::/, '')]));   // eslint-disable-line no-undef
-    const shown = [libLit, figLit || '', lit({ [v]: pv }), ...kept.map((id) => liveText[id].join('\n'))].join('\n');
+    // what the copy writes out fresh for the slides kept is meant to be there, their parts' names included
+    // (a left-out divider's title is often its part's name)
+    const shown = [...Object.values(swaps).filter(Boolean), ...kept.map((id) => liveText[id].join('\n'))].join('\n');
     const found = leaks(file, items, shown, engine);
     if (Object.keys(found).length) {
       const what = Object.keys(found).map((k) => KINDS[k] + ([...found[k]].filter(Boolean).length ? ` (${[...found[k]].filter(Boolean).slice(0, 4).map(esc).join(', ')}${found[k].size > 4 ? '…' : ''})` : ''));

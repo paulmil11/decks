@@ -4,13 +4,22 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
-## Unreleased
+## 0.10.0 (October 21, 2026)
 
 - Screen recordings of an open deck no longer blink every few seconds when the deck sits idle.
 - `sb shot`, `sb audit`, `sb export`, Download PDF, and dashboard thumbnails share one headless
   Chrome instead of starting their own each time, which takes about half a second off each one.
   A private worker keeps Chrome open and quits after two idle minutes; `SB_BROWSER_WORKER=0`
   turns it off. Thanks to @delirious6423, whose pull request designed the worker.
+- Dark decks stay readable everywhere. When a deck's theme sets light text for the whole page,
+  the parts around the slides (the sidebar, the title, slide numbers, the ↑ ↓ × buttons, comment
+  boxes, the Sorter switch) keep their own colors: in new decks' files, the Editable copy, and the
+  Review copy.
+- Share › Review copy works on decks made with extra pieces in New deck (a CEO deck, a live
+  presentation, and so on). Before, it stopped with "Couldn't find where the deck's source sets
+  PITCHES". Decks you've already made get the fix too, with no change to the deck file.
+- A save can only remove its own deck's saved keys, as it could already only set them. Also from
+  @delirious6423's pull request.
 
 ## 0.9.0 (October 20, 2026)
 
