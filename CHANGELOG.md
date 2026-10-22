@@ -4,7 +4,7 @@ What changed in each version of Decks. To update, run `git pull` in your Decks f
 restart the server. To hear about new versions, watch this repository on GitHub
 (Watch › Custom › Releases).
 
-## Unreleased
+## 0.11.0 (October 22, 2026)
 
 - **Shrink file size** (the last item in Share, or `sb shrink <deck>`) lists what makes a deck
   heavy, with what each change saves, and shrinks what you leave ticked. Photos saved as PNG
