@@ -142,6 +142,12 @@ redirect. GitHub sees your IP address and that a check happened.
 Nothing about your decks is sent. To turn it off, set `"check_updates": false` in
 `config.json`, or `SB_CHECK_UPDATES=0`. Check for updates still asks when you click it.
 
+Once a day, one of those checks asks strategyu.co instead, and says which version of Decks
+you run. That's how StrategyU counts how many copies run each version. Only the version number
+is kept: no IP address, no ID, and nothing about you or your decks. To send every check to
+GitHub instead, set `"count_version": false`, or `SB_COUNT_VERSION=0`. With update checks
+off, nothing is sent.
+
 ### Settings
 
 Defaults: port 8790, listening on 127.0.0.1, decks in `~/slide-decks`. To change them,
@@ -153,6 +159,7 @@ copy `config.example.json` to `config.json`, or set environment variables (they 
 | Address to listen on | `host` | `SB_HOST` |
 | Decks folder (also holds `decks.json` and `settings.json`) | `decks_dir` | `SB_DECKS_DIR` |
 | Ask GitHub every six hours for new versions (`true`) | `check_updates` | `SB_CHECK_UPDATES` |
+| Say your version to strategyu.co once a day, to be counted (`true`) | `count_version` | `SB_COUNT_VERSION` |
 | A different config file | | `SB_CONFIG` |
 | Where `sb` finds the server | | `SB_URL` |
 | Chrome for the headless jobs | | `SB_CHROME` |

@@ -41,7 +41,8 @@ SHRINKING = threading.Lock()   # one Shrink file size at a time
 STARTED = time.time()
 VERSION = '0.10.3'   # see CHANGELOG.md
 UPDATE_REPO = 'paulmil11/decks'   # where new versions are released (a fork points this at its own)
-LATEST = {}   # the newest release, from GitHub every few hours (sbconfig.CHECK_UPDATES)
+COUNT_URL = 'https://strategyu.co/api/decks/latest'   # answers like GitHub, and counts versions (sbconfig.COUNT_VERSION)
+LATEST = {}   # the newest release, asked every few hours (sbconfig.CHECK_UPDATES)
 CHECK_EVERY = 6 * 3600   # seconds between checks that worked
 RETRY_AFTER = 10 * 60    # after one that didn't: offline, or the network wasn't up yet at login
 
@@ -941,9 +942,19 @@ def vtuple(v):
 
 
 def check_latest():
-    """Which release is newest: one HEAD request to GitHub, read from where it redirects
-    (/releases/latest -> /releases/tag/v0.3.0). Nothing about your decks is sent.
-    True when GitHub answered, False when it couldn't be reached."""
+    """Which release is newest. Once a day, strategyu.co answers and counts the version this copy
+    runs (count_version in sbconfig: only the version number is kept). Every other time, or if
+    strategyu.co can't be reached, GitHub answers. Nothing about your decks is sent.
+    True when one of them answered, False when neither could be reached."""
+    return (count_due() and ask_strategyu()) or ask_github()
+
+
+def found(v):
+    LATEST.update({'version': v, 'url': f'https://github.com/{UPDATE_REPO}/releases/tag/v{v}', 'at': time.time()})
+
+
+def ask_github():
+    """One HEAD request, read from where it redirects (/releases/latest -> /releases/tag/v0.3.0)."""
     import http.client
     try:
         c = http.client.HTTPSConnection('github.com', timeout=6)
@@ -952,15 +963,59 @@ def check_latest():
         c.close()
         m = re.search(r'/releases/tag/v?(\d+\.\d+\.\d+)', loc)
         if m:
-            LATEST.update({'version': m.group(1), 'url': f'https://github.com/{UPDATE_REPO}/releases/tag/v{m.group(1)}', 'at': time.time()})
+            found(m.group(1))
             return True
     except (OSError, http.client.HTTPException):
         pass   # offline, or GitHub didn't answer: update_loop tries again soon
     return False
 
 
+COUNTED = sbconfig.DECKS / '.version-counted'   # the UTC day this copy last said its version
+
+
+def today():
+    return time.strftime('%Y-%m-%d', time.gmtime())
+
+
+def count_due():
+    """Copies of Decks itself (not forks) with update checks on say their version once a UTC day."""
+    if not (sbconfig.CHECK_UPDATES and sbconfig.COUNT_VERSION and UPDATE_REPO == 'paulmil11/decks'):
+        return False
+    try:
+        return COUNTED.read_text().strip() != today()
+    except OSError:
+        return True
+
+
+def ask_strategyu():
+    import http.client
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(f'{COUNT_URL}?v={VERSION}', headers={'User-Agent': f'Decks/{VERSION}'})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            body = r.read(4000)
+    except urllib.error.HTTPError:
+        body = b''   # it answered, so the version was counted; GitHub says which release is newest
+    except (OSError, http.client.HTTPException):
+        return False   # couldn't reach it: GitHub answers, and the next check tries strategyu.co again
+    try:
+        COUNTED.write_text(today() + '\n')
+    except OSError:
+        pass
+    try:
+        d = json.loads(body)
+    except ValueError:
+        d = None
+    v = d.get('latest') if isinstance(d, dict) else None
+    if not (isinstance(v, str) and re.fullmatch(r'\d+\.\d+\.\d+', v)):
+        return False
+    found(v)
+    return True
+
+
 def update_loop():
-    """Asks GitHub every few hours. It goes by the clock and naps a minute at a time, so a laptop
+    """Asks which release is newest every few hours. It goes by the clock and naps a minute at a time, so a laptop
     that was asleep checks soon after it wakes, and a check that failed is tried again in minutes."""
     time.sleep(5)   # after startup, so the first page never waits on it
     due = 0

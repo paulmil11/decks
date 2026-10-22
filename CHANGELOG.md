@@ -13,6 +13,12 @@ restart the server. To hear about new versions, watch this repository on GitHub
   slide uses and older PDF exports leave the folder. On a talk deck, the pictures went from
   11.2 MB to 8.1 MB and every slide looked the same; an imported deck's would go from 28 MB to
   10 MB. The originals are kept, and Undo puts everything back. It needs Pillow.
+- Once a day, the update check asks strategyu.co which release is newest, instead of GitHub,
+  and says which version you run, so StrategyU can count how many copies run each version. Only
+  the version number is kept: no IP address, no ID, nothing about your decks. If strategyu.co
+  can't be reached, GitHub answers as before. To turn the count off, set
+  `"count_version": false` in `config.json` (or `SB_COUNT_VERSION=0`). With update checks off,
+  nothing is sent.
 
 ## 0.10.3 (October 21, 2026)
 
