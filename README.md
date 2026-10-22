@@ -1,4 +1,9 @@
-# Decks
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img src="static/logo-decks.svg" alt="StrategyU Decks" width="380">
+  </picture>
+</p>
 
 Make slides by commenting on them. You leave a comment under a slide, your coding agent
 (Claude Code or Codex) changes the deck, and it replies on the slide: what it did, a
@@ -6,7 +11,30 @@ question for you, or why it left something alone.
 
 To try it, paste the prompt under [Get started](#get-started) into Claude Code or Codex.
 
-![A slide in Focus view: the reviewer's comment under it, and the agent's question back](docs/focus.png)
+![A slide in Focus view: a comment under it asking for a fourth reason and two more designs, Claude's reply saying what it did, and the slide's history in the side panel](docs/focus.png)
+
+## What it does
+
+- **You comment, your agent edits.** Leave a comment under a slide, or click any text and
+  fix it yourself. Claude Code or Codex changes the deck and replies on the slide.
+  ([How a round works](#how-a-round-works))
+- **Proposed slides.** Ask for another design and it lands next to your original. Space flips
+  between them, A accepts the new one, and K keeps yours. ([Proposed slides](#proposed-slides))
+- **Checks.** The tests I teach, one key each: the five- and ten-second tests, horizontal and
+  vertical flow, and guides for margins, titles, and text size.
+  ([Checks](#checks-the-tests-i-teach-one-key-each))
+- **Four views.** Focus for one slide, Scroll for the whole deck with its comments, Sorter to
+  see every slide at once and drag them into order, and Checks.
+  ([Working in a deck](#working-in-a-deck))
+- **A head start.** New deck asks what you're making (a presentation, a training, a talk, a
+  proposal, or a blank deck) and who it's for, then copies a prompt for your agent to build
+  the first draft. Or import a PowerPoint or PDF you already have.
+  ([Starting a deck](#starting-a-deck))
+- **Sharing.** Download a PDF, or send a Review copy that a client can comment on and edit,
+  then bring their changes back in. Shrink file size makes a heavy deck light.
+  ([Sending a deck out](#sending-a-deck-out-and-getting-feedback-back))
+- **Your machine, your files.** Each deck is one HTML file in its own folder, with its own
+  version history. ([One file each](#each-deck-is-one-file-on-your-machine))
 
 ## Why I built this
 
@@ -186,7 +214,7 @@ copy `config.example.json` to `config.json`, or set environment variables (they 
 Each slide keeps its history in the side panel: every comment, the agent's reply, and
 how it ended.
 
-![A revised slide: the new title, the history of the back-and-forth in the side panel, and the next question under the slide](docs/history.png)
+![A comment under a slide asking Claude to name the person who owns the usage data, and Claude's question back under it](docs/history.png)
 
 ### Watch mode: start each round with one click (Claude Code)
 
@@ -243,6 +271,8 @@ Sometimes the agent has another take on one of your slides: a redraw, a differen
 tighter version. It doesn't replace yours. It adds the new one right after it, as a proposal,
 or several options for one slide when the choice is real.
 
+![A proposed slide: Original, Option 1, and Option 2 to flip between above it, and Keep original or Accept option 2 under it](docs/proposals.png)
+
 - Under the proposal, **Accept** (A) puts it in your original's place, and **Keep original**
   (K) takes it out. Both apply to the version on screen at once, and U undoes.
 - Above it, **Original | Proposed** (Space) flips between the two in the same spot, and the
@@ -276,6 +306,8 @@ Four views, each with the slides on the left and the notes on the right:
 - **Sorter** (G): drag thumbnails to reorder, × to leave a slide out, and a shelf to bring
   slides back.
 - **Checks** (C): above.
+
+![Sorter: all 16 slides of a workshop deck at once, to drag into a new order](docs/sorter.png)
 
 The top bar keeps the rest in a few places:
 
